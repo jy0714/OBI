@@ -1,0 +1,30 @@
+# 분석 이력 DB / 개인정보 포함 데이터
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# DDI 추출 로그 / 분석 결과물 (퇴직자 보안로그)
+*.xlsx
+*.xlsm
+*.xls
+*.csv
+~$*
+
+# 비밀값
+.env
+.env.*
+.streamlit/secrets.toml
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 로컬 설정
+.claude/settings.local.json
+.vscode/
+.idea/
+Thumbs.db

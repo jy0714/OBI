@@ -149,7 +149,7 @@ def test_req07_report_only_on_click_and_ai_persisted(temp_db, sample):
     assert store.list_reports(aid).empty
 
     # 검토 입력 완료 → 버튼을 눌렀을 때만 생성·이력 기록
-    store.update_review(aid, "예", "예", "이상 없음", "검토 완료", "김검토")
+    store.update_review(aid, "아니오", "아니오", "이상 없음", "검토 완료", "김검토")   # 서약서 규칙(REQ-12) 해당 없음
     at.run()
     assert not at.button(key="new_report").disabled and store.list_reports(aid).empty
     at.button(key="new_report").click().run()
@@ -179,3 +179,33 @@ def test_req07_ai_request_saves_to_db(temp_db, sample, monkeypatch):
     assert a["AI의견"].endswith("Medium") and a["AI프로바이더"] == "ollama"
     at.button(key="new_llm_run").click().run()                 # 다시 요청
     assert len(store.get_analysis(aid)["AI이전생성일시"]) == 1
+
+
+def test_req12_pledge_upload_flow(temp_db, sample):
+    """인터뷰 '예' + 서약서 없음 → 저장 거부 / 잘못된 파일 거부 / PDF 올리면 '예' 자동 → 검토 완료·리포트 가능"""
+    import obi_pipeline as pipeline
+    aid = pipeline.save(sample["result"])
+    store.update_review(aid, "예", "미확인", "인터뷰 완료", "검토 중", "김검토")
+    at = AppTest.from_file(APP, default_timeout=60)
+    at.session_state["current_id"] = aid
+    at.run()
+    assert any("보안서약서 PDF" in w.value for w in at.warning)                  # 입력 필요
+    assert "예" not in at.selectbox[1].options                                    # 파일 없으면 '예' 불가
+    at.button(key="FormSubmitter:new_review-검토 내용 저장").click().run()
+    assert any("보안서약서 PDF" in e.value for e in at.error)
+    assert at.button(key="new_report").disabled
+
+    at.file_uploader(key="new_pledge_up").set_value(("가짜.pdf", b"PK not pdf", "application/pdf")).run()
+    assert any("PDF 파일이 아닙니다" in e.value for e in at.error)
+    assert store.current_pledge(aid) is None
+
+    at.file_uploader(key="new_pledge_up").set_value(("서약서.pdf", b"%PDF-1.4 ok", "application/pdf")).run()
+    assert not at.exception, at.exception
+    assert store.current_pledge(aid)["원본파일명"] == "서약서.pdf"
+    assert store.get_analysis(aid)["보안서약서"] == "예"
+    at.button(key="FormSubmitter:new_review-검토 내용 저장").click().run()
+    assert store.get_analysis(aid)["검토일시"] != ""                             # 저장됨
+    assert not at.button(key="new_report").disabled
+
+    at.button(key="new_pledge_read").click().run()                               # 누를 때만 읽음 + 이력
+    assert len(store.list_pledge_downloads(aid)) == 1

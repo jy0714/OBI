@@ -140,7 +140,7 @@ def test_req08_review_required_rules():
     empty = dict(테스트여부=0, 인터뷰여부="미확인", 보안서약서="미확인", 검토자="", 코멘트="")
     assert p.review_missing(empty) == ["인터뷰 여부", "보안서약서 작성 여부", "검토자", "Comment 및 확인 결과"]
     assert p.review_missing(dict(empty, 테스트여부=1)) == []                     # Test 는 요구 안 함
-    full = dict(empty, 인터뷰여부="예", 보안서약서="아니오", 검토자="김검토", 코멘트="이상 없음")
+    full = dict(empty, 인터뷰여부="예", 보안서약서="아니오", 검토자="김검토", 코멘트="이상 없음", 서약서수=1)
     assert p.review_missing(full) == []
     assert p.review_missing(dict(full, 코멘트="   ")) == ["Comment 및 확인 결과"]
     assert p.review_missing({"인터뷰여부": "예"}) != []                           # 옛 이력(테스트여부 없음) = 정식
@@ -288,3 +288,33 @@ def test_req11_companion_rules_unit():
 
 def test_req11_prompt_mentions_companion(sample):
     assert "사내 동반" in sample["prompt"] and "판단 기준" in sample["prompt"]
+
+
+# --- REQ-12 보안서약서 필수 규칙 ------------------------------------------------
+def test_req12_pledge_rules():
+    import obi_pipeline as p
+    full = dict(테스트여부=0, 인터뷰여부="예", 보안서약서="예", 검토자="김", 코멘트="확인", 서약서수=0)
+    assert p.review_missing(full) == ["보안서약서 PDF"]                     # 인터뷰 '예' → PDF 필수
+    assert p.review_missing(dict(full, 서약서수=1)) == []
+    assert p.review_missing(dict(full, 인터뷰여부="아니오", 보안서약서="아니오")) == []   # 미진행자는 선택
+    assert p.review_missing(dict(full, 인터뷰여부="아니오")) == ["보안서약서 PDF"]       # '예'는 파일이 있어야
+    assert p.review_missing(dict(full, 테스트여부=1)) == []                            # Test 는 요구 안 함
+    assert p.pledge_status(dict(full, 서약서수=1)) == "첨부됨"
+    assert p.pledge_status(full) == "필요"
+    assert p.pledge_status(dict(full, 인터뷰여부="아니오")) == "해당 없음"
+    assert p.pledge_status(dict(full, 테스트여부=1)) == "해당 없음"
+
+
+def test_req12_board_column(tmp_path, monkeypatch, sample):
+    import obi_pipeline as p
+    import obi_store as store
+    monkeypatch.setattr(store, "DB_PATH", str(tmp_path / "b.db"))
+    store.init_db()
+    a = p.save(sample["result"])
+    b = p.save(sample["result"])
+    store.update_review(a, "예", "미확인", "c", "검토 중", "r")
+    store.update_review(b, "예", "미확인", "c", "검토 중", "r")
+    store.save_pledge(b, "s.pdf", b"%PDF-1.4 x", "r")
+    v = p.board(store.list_analyses()).set_index("이력#")
+    assert v.loc[a, "서약서"] == "필요" and v.loc[a, "입력 완료"] == "입력 필요"
+    assert v.loc[b, "서약서"] == "첨부됨" and v.loc[b, "입력 완료"] == "완료"

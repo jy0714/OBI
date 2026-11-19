@@ -186,11 +186,26 @@ def review_missing(rec):
         miss.append("검토자")
     if not str(get("코멘트", "") or "").strip():
         miss.append("Comment 및 확인 결과")
+    # REQ-12: 인터뷰를 했으면 서약서 PDF 필수, '작성 여부 = 예'는 파일이 있을 때만
+    # [결정 필요 #10] 인터뷰를 안 했으면 서약서는 선택
+    no_file = not int(get("서약서수", 0) or 0)
+    if no_file and (get("인터뷰여부", "") == "예" or get("보안서약서", "") == "예"):
+        miss.append("보안서약서 PDF")
     return miss
 
 
+def pledge_status(rec):
+    """게시판 '서약서' 칸: 첨부됨 / 필요 / 해당 없음"""
+    get = rec.get if hasattr(rec, "get") else (lambda k, d=None: getattr(rec, k, d))
+    if int(get("서약서수", 0) or 0):
+        return "첨부됨"
+    if not int(get("테스트여부", 0) or 0) and get("인터뷰여부", "") == "예":
+        return "필요"
+    return "해당 없음"
+
+
 BOARD_COLUMNS = ["이력#", "분석일시", "회사", "이름", "직급", "부서", "퇴직일자", "최고 등급", "확인 필요 건수",
-                 "검토 상태", "검토자", "입력 완료", "테스트"]
+                 "검토 상태", "검토자", "입력 완료", "서약서", "테스트"]
 NO_GRADE = "(없음)"     # 옛 이력 등 등급이 저장되지 않은 건
 
 
@@ -223,6 +238,7 @@ def board(df, q="", companies=None, states=None, grades=None, date_from=None, da
         "부서": v["부서"], "퇴직일자": v["퇴직일자"], "최고 등급": v["최고등급"],
         "확인 필요 건수": v["확인필요건수"], "검토 상태": v["검토상태"], "검토자": v["검토자"],
         "입력 완료": ["-" if r.테스트여부 else ("입력 필요" if review_missing(r) else "완료") for r in v.itertuples()],
+        "서약서": [pledge_status(r) for r in v.itertuples()],
         "테스트": v["테스트여부"].map({1: "TEST", 0: ""}),
     }, columns=BOARD_COLUMNS)
     return out.reset_index(drop=True)

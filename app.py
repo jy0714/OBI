@@ -204,6 +204,40 @@ def render_dashboard(tl, a, key):
         st.caption("평소 기간은 약 5개월이라 30일 평균으로 맞춰 최근 30일과 비교합니다. 건수가 적으면 차이가 과장될 수 있습니다.")
 
 
+def render_pledge(a, key):
+    """REQ-12 보안서약서 PDF: 현재 파일 정보·내려받기·올리기(교체)"""
+    aid, cur = a["id"], a["서약서"]
+    st.markdown("**보안서약서 PDF**" + (" · 인터뷰 진행 → 필수" if a["인터뷰여부"] == "예" and not a["테스트여부"] else ""))
+    c1, c2 = st.columns([3, 2])
+    with c1:
+        if cur:
+            st.caption(f"📄 {cur['원본파일명']} · {cur['크기'] / 1024:,.0f}KB · 올린 사람 {cur['올린사람'] or '-'}"
+                       f" · {cur['올린일시']}" + (f" · 이전 {a['서약서수'] - 1}개 보관" if a["서약서수"] > 1 else ""))
+            dl_key = f"pledge_dl_{cur['id']}"
+            if st.button("서약서 내려받기", key=f"{key}_pledge_read"):     # 버튼을 눌렀을 때만 파일을 읽는다
+                try:
+                    st.session_state[dl_key] = store.read_pledge(cur["id"], st.session_state.get("user", ""))
+                except (OSError, LookupError, ValueError) as e:
+                    st.error(str(e))
+            if dl_key in st.session_state:
+                st.download_button(f"⬇ {cur['원본파일명']}", st.session_state[dl_key], file_name=cur["원본파일명"],
+                                   mime="application/pdf", key=f"{key}_pledge_dl")
+        else:
+            st.caption("올린 서약서가 없습니다.")
+    with c2:
+        up = st.file_uploader("교체할 PDF 올리기" if cur else "PDF 올리기", type=["pdf"], key=f"{key}_pledge_up",
+                              help=f"PDF 만, 최대 {store.PLEDGE_MAX_MB}MB. 다시 올리면 이전 파일은 보관되고 새 파일이 현재본이 됩니다.")
+        done_key = f"{key}_pledge_done"
+        if up is not None and st.session_state.get(done_key) != up.file_id:   # 같은 업로드를 두 번 저장하지 않음
+            try:
+                store.save_pledge(aid, up.name, up.getvalue(), st.session_state.get("user", ""))
+                st.session_state[done_key] = up.file_id
+                st.rerun()
+            except ValueError as e:
+                st.session_state[done_key] = up.file_id
+                st.error(str(e))
+
+
 def candidate_card(r, tl, key):
     with st.container(border=True):
         st.markdown(chip(f"{GRADE_ICON.get(r.등급, '')} {r.등급}", r.등급) +
@@ -391,16 +425,23 @@ def render_detail(analysis_id, key):
     st.divider()
     with st.expander("검토 입력 · 이력 저장" + (" (Test — 선택 입력)" if a["테스트여부"] else " (필수)"),
                      expanded=bool(missing) or a["검토상태"] != "검토 완료"):
+        render_pledge(a, key)
+        has_file = a["서약서"] is not None
         with st.form(f"{key}_review"):
             r1, r2, r3, r4 = st.columns(4)
-            interview = r1.selectbox("인터뷰 여부", YES_NO, index=YES_NO.index(a["인터뷰여부"]))
-            pledge = r2.selectbox("보안서약서 작성 여부", YES_NO, index=YES_NO.index(a["보안서약서"]))
+            interview = r1.selectbox("인터뷰 여부", YES_NO, index=YES_NO.index(a["인터뷰여부"]),
+                                     help="'예'이면 보안서약서 PDF 를 올려야 검토를 완료할 수 있습니다.")
+            # '예'는 서약서 파일이 있을 때만 고를 수 있다 (파일을 올리면 자동으로 '예')
+            pledge_opts = YES_NO if has_file else [x for x in YES_NO if x != "예"]
+            pledge = r2.selectbox("보안서약서 작성 여부", pledge_opts,
+                                  index=pledge_opts.index(a["보안서약서"]) if a["보안서약서"] in pledge_opts else 0,
+                                  help=None if has_file else "'예'는 서약서 PDF 를 올리면 자동으로 선택됩니다.")
             state = r3.selectbox("검토 상태", REVIEW_STATES, index=REVIEW_STATES.index(a["검토상태"]))
             reviewer = r4.text_input("검토자", value=a["검토자"] or st.session_state.get("user", ""))
             comment = st.text_area("Comment 및 확인 결과", value=a["코멘트"], height=110)
             if st.form_submit_button("검토 내용 저장", type="primary"):
                 lack = pipeline.review_missing(dict(테스트여부=a["테스트여부"], 인터뷰여부=interview, 보안서약서=pledge,
-                                                    검토자=reviewer, 코멘트=comment))
+                                                    검토자=reviewer, 코멘트=comment, 서약서수=a["서약서수"]))
                 if lack:
                     st.error("다음 항목을 입력해야 저장할 수 있습니다: " + ", ".join(lack))
                 else:
@@ -575,7 +616,7 @@ with st.sidebar:
         st.text_input("모델명", key="anthropic_model",
                       value=st.session_state.get("anthropic_model", ai.PROVIDER_DEFAULTS["anthropic"]["model"]))
     st.divider()
-    st.caption(f"이력 저장 위치\n\n`{store.DB_PATH}`")
+    st.caption(f"이력 저장 위치\n\n`{store.DB_PATH}`\n\n서약서 저장 위치\n\n`{store.files_dir()}`")
 
 if menu == "새 분석":
     page_new()

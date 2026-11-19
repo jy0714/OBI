@@ -125,6 +125,14 @@ def fmt_mb(n_bytes):
     return f"{n_bytes / MB:,.1f}MB"
 
 
+def fmt_size(n_bytes):
+    """화면 표시용 용량: 1MB 미만은 KB, 값이 없으면 빈칸"""
+    n = pd.to_numeric(n_bytes, errors="coerce")
+    if pd.isna(n) or n <= 0:
+        return ""
+    return fmt_mb(n) if n >= MB else f"{n / 1024:,.0f}KB"
+
+
 def transfer_bytes(tl):
     """전송 용량으로 셀 값 (Series, 대상 아니면 0).
     허용된 전송 채널만, USB 삭제는 제외, USB로그와 중복 기록된 DLP USB 는 한 번만 센다."""

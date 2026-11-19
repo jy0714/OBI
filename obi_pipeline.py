@@ -46,6 +46,39 @@ def size_stats(tl):
     return pd.DataFrame(rows, columns=cols)
 
 
+PERSONAL_MAIL_COLUMNS = ["이벤트ID", "시각", "구분", "첨부", "수신자", "제목", "첨부 파일명", "첨부 수", "용량",
+                         "차단 여부", "점검결과", "점검 사유"]
+
+
+def personal_mail(tl):
+    """REQ-05 개인메일 발송: 개인메일 도메인 수신자가 있는 메일 + 개인메일 사이트 웹 업로드.
+    참고(R1·R2·R4)로 빠진 건도 숨기지 않는다. 정렬: 첨부 있음 → 확인 필요 → 시간순."""
+    if tl.empty or "개인메일" not in tl:
+        return pd.DataFrame(columns=PERSONAL_MAIL_COLUMNS)
+    m = tl[(tl["개인메일"].fillna("") == "Y") & tl["채널"].isin(["이메일", "웹 업로드"])]
+    rows = []
+    for _, r in m.iterrows():
+        files = prep.split_files(r.get("파일목록"))
+        mail = r["채널"] == "이메일"
+        size = pd.to_numeric(r.get("용량_bytes"), errors="coerce")
+        rows.append({
+            "이벤트ID": r["이벤트ID"], "시각": r["시간"], "구분": "메일" if mail else "웹 업로드",
+            "첨부": "첨부 있음" if files else "",
+            "수신자": r.get("수신자") if mail else r.get("대상"),
+            "제목": str(r.get("대상") or "").removeprefix("제목: ") if mail else "",
+            "첨부 파일명": ", ".join(files), "첨부 수": len(files),
+            "용량": crit.fmt_size(size),
+            "차단 여부": r.get("차단여부"), "점검결과": r.get("점검결과") or "", "점검 사유": r.get("점검사유") or "",
+        })
+    df = pd.DataFrame(rows, columns=PERSONAL_MAIL_COLUMNS)
+    if df.empty:
+        return df
+    df["_무첨부"] = df["첨부 수"] == 0
+    df["_참고"] = df["점검결과"] != "확인 필요"
+    return (df.sort_values(["_무첨부", "_참고", "시각"], kind="stable")
+            .drop(columns=["_무첨부", "_참고"]).reset_index(drop=True))
+
+
 def derive(tl):
     """검토 후보(점수)와 한눈에 보기 요약. LLM 연동 시 obi_ai 쪽만 교체하면 된다."""
     cands = ai.mock_analyze(tl)

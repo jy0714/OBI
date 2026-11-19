@@ -73,3 +73,27 @@ def test_req01_size_stats(sample):
     import obi_pipeline
     s = obi_pipeline.size_stats(sample["tl"]).set_index("채널")
     assert s.loc["웹", "최대_MB"] == 120.0
+
+
+# --- REQ-05 개인메일 발송 -----------------------------------------------------
+def test_req05_personal_mail_table(sample):
+    pm = sample["personal_mail"]
+    top = pm.iloc[0]
+    assert "friend@gmail.com" in top["수신자"] and "임직원 연락처.xlsx" in top["첨부 파일명"]
+    assert top["첨부"] == "첨부 있음" and top["점검결과"] == "확인 필요"
+    # 사내 동반 수신(R2)도 같은 영역에 참고로 나온다
+    r2 = pm[pm["수신자"].astype(str).str.contains("me@naver.com")].iloc[0]
+    assert r2["점검결과"] == "참고" and "R2" in r2["점검 사유"]
+    # 차단된 개인메일 발송(R1)도 숨기지 않는다
+    assert (pm["차단 여부"] == "차단").any()
+    # 첨부 있는 건이 모두 위
+    has = (pm["첨부 수"] > 0).tolist()
+    assert has == sorted(has, reverse=True)
+
+
+def test_req05_web_upload_and_no_attachment(sample):
+    pm = sample["personal_mail"]
+    web = pm[pm["구분"] == "웹 업로드"]
+    assert len(web) == 1 and "mail.naver.com" in web.iloc[0]["수신자"]
+    last = pm.iloc[-1]
+    assert last["첨부 수"] == 0 and "me2@daum.net" in last["수신자"]

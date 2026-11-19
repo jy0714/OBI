@@ -93,16 +93,22 @@ def col_filled(tl, col):
     return tl[tl[col].fillna("") != ""] if col in tl else tl.iloc[0:0]
 
 
-def run_analysis(uploaded, info, base_date, test=False):
-    """업로드 파일을 임시 저장 → 전처리 → 이력 자동 저장 → 임시 파일 삭제"""
+def read_upload(uploaded):
+    """업로드 파일을 임시 저장 → 한 번 읽기(LogWorkbook) → 임시 파일 삭제 (REQ-10).
+    읽은 결과는 session_state 에 두고 분석 실행 때 다시 쓴다 (암호화 파일은 엑셀을 다시 열지 않음)."""
     suffix = os.path.splitext(uploaded.name)[1] or ".xlsx"
     with tempfile.TemporaryDirectory() as tmp:
         src = os.path.join(tmp, "input" + suffix)
-        out = os.path.join(tmp, "result.xlsx")
         with open(src, "wb") as f:
             f.write(uploaded.getbuffer())
-        r = pipeline.analyze_file(src, out, info, base_date)
-    return pipeline.save(r, test=test)
+        return pipeline.read_log(src)
+
+
+def run_analysis(xls, info, base_date, test=False, sources=None):
+    """읽어 둔 로그 → 전처리 → 이력 자동 저장"""
+    with tempfile.TemporaryDirectory() as tmp:
+        r = pipeline.analyze_file(xls, os.path.join(tmp, "result.xlsx"), info, base_date)
+    return pipeline.save(r, test=test, sources=sources)
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +195,10 @@ def render_detail(analysis_id, key):
     h1.markdown(f"<div class='obi-card-title' style='font-size:20px'>{a['이름']} · {a['회사']} {a['부서']}"
                 f" · 퇴직일 {a['퇴직일자']}</div>"
                 f"<div class='obi-card-meta'>이력 #{a['id']} · 분석 {a['분석일시']} · 로그 기준일 {a['기준일']}"
-                f" · 계정 {a['계정']} · 로그 검증 {a['검증상태']}</div>", unsafe_allow_html=True)
+                f" · 계정 {a['계정']} · 로그 검증 {a['검증상태']}"
+                + (" · 인적 사항 " + " ".join(f"{k}({v})" for k, v in a["인적사항출처"].items())
+                   if a.get("인적사항출처") else "")
+                + "</div>", unsafe_allow_html=True)
     h2.markdown(chip(f"{GRADE_ICON.get(top_grade, '')} 최고 등급 {top_grade}", top_grade)
                 + (chip("TEST", "Low") if a["테스트여부"] else ""), unsafe_allow_html=True)
     missing = pipeline.review_missing(a)
@@ -395,30 +404,56 @@ def page_new():
     top_bar("새 분석")
     has_result = bool(st.session_state.get("current_id"))
     with st.expander("새 분석 실행" if has_result else "분석할 로그 올리기", expanded=not has_result):
+        # 1) 파일을 먼저 올린다 — 폼 밖이라 올리는 즉시 읽어서 인적 사항을 채운다 (REQ-10)
+        uploaded = st.file_uploader("추출로그 by DDI *", type=["xlsx", "xls"], key="upload_file")
+        up = st.session_state.get("upload")
+        if uploaded is None:
+            st.session_state.pop("upload", None)
+            up = None
+        elif up is None or up["id"] != uploaded.file_id:
+            with st.spinner("로그를 읽고 있습니다. 암호화 파일은 엑셀을 여는 데 시간이 조금 걸립니다."):
+                try:
+                    xls, person = read_upload(uploaded)
+                    up = dict(id=uploaded.file_id, name=uploaded.name, xls=xls, person=person)
+                    st.session_state["upload"] = up
+                    for k, field in (("f_name", "이름"), ("f_rank", "직급"), ("f_dept", "부서")):
+                        st.session_state[k] = person.get(field, "")   # 위젯 생성 전에 값 채우기
+                except SystemExit as e:
+                    st.error(str(e))
+                    up = None
+        person = up["person"] if up else {}
+        if up:
+            got = [f"{k} {person[k]}" for k in ("이름", "직급", "부서") if person.get(k)]
+            st.caption(("로그에서 채운 값: " + ", ".join(got) + " · 고칠 수 있습니다" if got
+                        else "로그에서 인적 사항을 찾지 못했습니다. 직접 입력하세요.")
+                       + (f" · ⚠️ 로그 값이 여러 개: {', '.join(person['갈림'])}" if person.get("갈림") else ""))
+
+        # 2) 인적 사항·조건 입력
         with st.form("new_analysis"):
             c1, c2, c3, c4 = st.columns(4)
             company = c1.selectbox("회사 *", COMPANIES)
-            name = c2.text_input("이름 *")
-            rank = c3.text_input("직급")
-            dept = c4.text_input("부서")
-            d1, d2, d3 = st.columns([1, 1, 2])
+            name = c2.text_input("이름 *", key="f_name")
+            rank = c3.text_input("직급", key="f_rank")
+            dept = c4.text_input("부서", key="f_dept")
+            d1, d2, _ = st.columns([1, 1, 2])
             retire = d1.date_input("퇴직(예정)일 *", value=date.today())
             base = d2.date_input("로그 추출일", value=None, help="비워두면 로그의 마지막 날짜를 기준일로 사용합니다")
-            uploaded = d3.file_uploader("추출로그 by DDI *", type=["xlsx", "xls"])
             s1, s2 = st.columns([1, 4])
             submitted = s1.form_submit_button("분석 실행", type="primary")
             test = s2.checkbox("Test로 실행", help="검토 입력을 요구하지 않고, 게시판 기본 목록과 기존 양식 내보내기에서 빠집니다. "
                                                   "Test 이력은 실제 삭제할 수 있습니다.")
 
     if submitted:
-        if not uploaded or not name:
+        if not up or not name.strip():
             st.error("이름과 추출로그 파일은 필수입니다.")
         else:
-            info = dict(회사=company, 이름=name.strip(), 직급=rank, 부서=dept, 퇴직일자=str(retire),
-                        원본파일명=uploaded.name, 분석자=st.session_state.get("user", ""))
-            with st.spinner("로그를 정리하고 있습니다. 암호화 파일은 엑셀을 여는 데 시간이 조금 걸립니다."):
+            info = dict(회사=company, 이름=name.strip(), 직급=rank.strip(), 부서=dept.strip(), 퇴직일자=str(retire),
+                        원본파일명=up["name"], 분석자=st.session_state.get("user", ""))
+            sources = pipeline.person_sources(person, info)
+            with st.spinner("로그를 정리하고 있습니다."):
                 try:
-                    st.session_state["current_id"] = run_analysis(uploaded, info, str(base) if base else None, test)
+                    st.session_state["current_id"] = run_analysis(up["xls"], info, str(base) if base else None,
+                                                                  test, sources)
                 except SystemExit as e:
                     st.error(str(e))
                 except Exception as e:

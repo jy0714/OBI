@@ -88,3 +88,27 @@ def test_req09_board_to_detail_and_back(temp_db, sample):
     at.button(key="board_back").click().run()
     assert "board_pick" not in at.session_state
     assert not any(m.label == "최고 등급" for m in at.metric)                       # 게시판으로 돌아옴
+
+
+def test_req10_upload_prefills_and_user_edit_wins(temp_db, tmp_path):
+    """업로드 즉시 이름·직급 자동 입력 → 직급을 고쳐 Test 로 실행 → 고친 값과 출처가 저장된다 (REQ-10·08)"""
+    import sample_ddi
+    data = open(sample_ddi.build(str(tmp_path / "s.xlsx")), "rb").read()
+    xmime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    at = AppTest.from_file(APP, default_timeout=60).run()
+    at.file_uploader(key="upload_file").set_value(("로그.xlsx", data, xmime)).run()
+    assert not at.exception, at.exception
+    assert at.text_input(key="f_name").value == "홍길동"
+    assert at.text_input(key="f_rank").value == "선임"
+    assert at.text_input(key="f_dept").value == ""
+
+    at.text_input(key="f_rank").set_value("책임")
+    at.checkbox[0].check()
+    at.date_input[0].set_value(__import__("datetime").date(2026, 9, 30))
+    at.date_input[1].set_value(__import__("datetime").date(2026, 9, 2))
+    at.button(key="FormSubmitter:new_analysis-분석 실행").click().run()
+    assert not at.exception, at.exception
+    aid = at.session_state["current_id"]
+    a = store.get_analysis(aid)
+    assert (a["이름"], a["직급"], a["원본파일명"], a["테스트여부"]) == ("홍길동", "책임", "로그.xlsx", 1)
+    assert a["인적사항출처"] == {"이름": "로그", "직급": "수정", "부서": "직접"}

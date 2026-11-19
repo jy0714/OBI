@@ -22,6 +22,15 @@ def read_log(src_path):
     return xls, prep.extract_person(xls)
 
 
+def person_sources(person, values):
+    """REQ-10 인적 사항 출처: 로그 값 그대로='로그', 로그 값을 고침='수정', 로그에 없어 직접 입력='직접'"""
+    out = {}
+    for k in ("이름", "직급", "부서"):
+        auto, val = str(person.get(k) or "").strip(), str(values.get(k) or "").strip()
+        out[k] = ("로그" if val == auto else "수정") if auto else "직접"
+    return out
+
+
 def analyze_file(src, out_path, info, base_date=None, account=None):
     """전처리 실행 후 store.save_analysis() 에 넘길 값을 돌려준다.
 

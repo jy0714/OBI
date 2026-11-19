@@ -169,3 +169,10 @@ def test_req06_board_filters(tmp_path, monkeypatch, sample):
     assert p.board(df, grades=[p.NO_GRADE])["이력#"].tolist() == [old]
     assert p.board(df, q="옛이")["이력#"].tolist() == [old]
     assert p.board(df, date_to=date(2000, 1, 1)).empty
+
+
+def test_req10_person_sources():
+    import obi_pipeline as p
+    person = {"이름": "홍길동", "직급": "선임", "부서": ""}
+    assert p.person_sources(person, {"이름": "홍길동", "직급": "책임", "부서": "보안팀"}) == \
+        {"이름": "로그", "직급": "수정", "부서": "직접"}

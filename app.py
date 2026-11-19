@@ -192,12 +192,14 @@ def render_detail(analysis_id, key):
                 f" · 계정 {a['계정']} · 로그 검증 {a['검증상태']}</div>", unsafe_allow_html=True)
     h2.markdown(chip(f"{GRADE_ICON.get(top_grade, '')} 최고 등급 {top_grade}", top_grade), unsafe_allow_html=True)
 
-    m = st.columns(5)
+    pmail = pipeline.personal_mail(tl)
+    m = st.columns(6)
     m[0].metric("검토 후보", f"{len(cands)}건")
     m[1].metric("최고 등급", top_grade)
     m[2].metric("확인 필요 행위", f"{len(need)}건")
-    m[3].metric("참고 관찰", f"{len(ref)}건")
-    m[4].metric("전체 이벤트", f"{a['이벤트수']}건")
+    m[3].metric("개인메일 발송", f"{len(pmail)}건 (첨부 {int((pmail['첨부 수'] > 0).sum())}건)")
+    m[4].metric("참고 관찰", f"{len(ref)}건")
+    m[5].metric("전체 이벤트", f"{a['이벤트수']}건")
 
     if a["검증상태"] != "정상":
         st.error("로그 검증에서 확인이 필요한 항목이 있습니다. '기준 점검' 탭의 검증 상세를 먼저 확인하세요.")
@@ -217,6 +219,18 @@ def render_detail(analysis_id, key):
             st.caption("확인 필요 행위에 등장한 파일이 없습니다.")
         else:
             selectable_table(files, tl, f"{key}_files", "근거 이벤트ID")
+
+    # ---------------- 개인메일 발송 (REQ-05) ----------------
+    with st.container(border=True):
+        n_att = int((pmail["첨부 수"] > 0).sum())
+        st.markdown(f"##### 개인메일 발송 · {len(pmail)}건 &nbsp; :red-badge[첨부 {n_att}건]")
+        if pmail.empty:
+            st.caption("개인메일 도메인으로 보낸 메일이나 개인메일 사이트 업로드가 없습니다.")
+        else:
+            view = pmail.assign(첨부=pmail["첨부"].map(lambda x: "📎 첨부" if x else ""))
+            selectable_table(view, tl, f"{key}_pmail", "이벤트ID",
+                             caption="📎 첨부가 있는 건이 위에 옵니다. 참고(차단·사내 동반·개인 문서)로 분류된 건도 함께 표시합니다. "
+                                     "행을 누르면 원본 로그가 나옵니다.")
 
     t_ai, t_main, t_tl, t_sum, t_llm = st.tabs(
         [f"검토 후보 ({len(cands)})", "기준 점검", "통합타임라인", "채널·추이", "AI 분석"])

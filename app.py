@@ -433,25 +433,30 @@ def page_history():
     if df.empty:
         st.info("아직 저장된 이력이 없습니다.")
         return
-    f1, f2, f3 = st.columns([2, 1, 2])
-    q = f1.text_input("이름·부서 검색")
-    comps = f2.multiselect("회사", COMPANIES, default=COMPANIES)
-    states = f3.multiselect("검토 상태", REVIEW_STATES, default=REVIEW_STATES)
-    view = df[df["검토상태"].isin(states) & df["회사"].isin(comps)]
-    if q:
-        view = view[view["이름"].str.contains(q, na=False) | view["부서"].str.contains(q, na=False)]
 
-    cols = ["id", "분석일시", "회사", "이름", "직급", "부서", "퇴직일자", "인터뷰여부", "보안서약서",
-            "코멘트", "검토상태", "검토자", "검증상태"]
-    st.dataframe(view[cols].rename(columns={"id": "이력#", "인터뷰여부": "인터뷰 여부", "보안서약서": "보안서약서 작성 여부",
-                                            "코멘트": "Comment 및 확인 결과"}),
-                 hide_index=True, width="stretch")
-    st.download_button("이력 엑셀 내보내기 (기존 양식)",
-                       data=to_excel_bytes({"이력관리": store.to_legacy_frame(view)}),
+    with st.container(border=True):
+        f1, f2, f3, f4 = st.columns([2, 1.2, 1.6, 1.6])
+        q = f1.text_input("이름·부서 검색")
+        comps = f2.multiselect("회사", COMPANIES, default=COMPANIES)
+        states = f3.multiselect("검토 상태", REVIEW_STATES, default=REVIEW_STATES)
+        grade_opts = list(ai.GRADES) + [pipeline.NO_GRADE]
+        grades = f4.multiselect("최고 등급", grade_opts, default=grade_opts)
+        g1, g2, g3 = st.columns([1, 1, 2.6])
+        d_from = g1.date_input("분석일 부터", value=None)
+        d_to = g2.date_input("분석일 까지", value=None)
+        include_test = g3.toggle("Test 이력 포함", value=False)
+    view = pipeline.board(df, q, comps, states, grades, d_from, d_to, include_test)
+
+    st.caption(f"{len(view)}건 · 최신순 · 저장 위치 `{store.DB_PATH}`")
+    st.dataframe(view, hide_index=True, width="stretch")
+    picked_ids = view["이력#"].tolist()
+    st.download_button("이력 엑셀 내보내기 (기존 양식 · Test 제외)",
+                       data=to_excel_bytes({"이력관리": store.to_legacy_frame(df[df["id"].isin(picked_ids)])}),
                        file_name=f"OBI_이력관리_{date.today()}.xlsx")
 
     st.divider()
-    options = {f"#{r.id} {r.이름} ({r.회사} {r.부서}) · 퇴직 {r.퇴직일자}": r.id for r in view.itertuples()}
+    options = {f"#{r.이력} {r.이름} ({r.회사} {r.부서}) · 퇴직 {r.퇴직일자}": r.이력
+               for r in view.rename(columns={"이력#": "이력"}).itertuples()}
     if options:
         pick = st.selectbox("상세 보기", list(options))
         render_detail(options[pick], key=f"hist_{options[pick]}")

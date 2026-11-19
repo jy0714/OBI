@@ -178,6 +178,45 @@ def review_missing(rec):
     return miss
 
 
+BOARD_COLUMNS = ["이력#", "분석일시", "회사", "이름", "직급", "부서", "퇴직일자", "최고 등급", "확인 필요 건수",
+                 "검토 상태", "검토자", "입력 완료", "테스트"]
+NO_GRADE = "(없음)"     # 옛 이력 등 등급이 저장되지 않은 건
+
+
+def board(df, q="", companies=None, states=None, grades=None, date_from=None, date_to=None, include_test=False):
+    """REQ-06 게시판: store.list_analyses() 결과 → 필터·검색 후 표시용 표 (최신순).
+    grades 에 NO_GRADE 를 넣으면 등급이 비어 있는 옛 이력도 나온다."""
+    if df.empty:
+        return pd.DataFrame(columns=BOARD_COLUMNS)
+    v = df.copy()
+    if not include_test:
+        v = v[v["테스트여부"] == 0]
+    if companies is not None:
+        v = v[v["회사"].isin(companies)]
+    if states is not None:
+        v = v[v["검토상태"].isin(states)]
+    if grades is not None:
+        v = v[v["최고등급"].replace("", NO_GRADE).isin(grades)]
+    day = pd.to_datetime(v["분석일시"], errors="coerce").dt.date
+    if date_from is not None:
+        v = v[day >= date_from]
+        day = day[v.index]
+    if date_to is not None:
+        v = v[day <= date_to]
+    if q:
+        v = v[v["이름"].astype(str).str.contains(q, na=False, regex=False)
+              | v["부서"].astype(str).str.contains(q, na=False, regex=False)]
+    v = v.sort_values("id", ascending=False)
+    out = pd.DataFrame({
+        "이력#": v["id"], "분석일시": v["분석일시"], "회사": v["회사"], "이름": v["이름"], "직급": v["직급"],
+        "부서": v["부서"], "퇴직일자": v["퇴직일자"], "최고 등급": v["최고등급"],
+        "확인 필요 건수": v["확인필요건수"], "검토 상태": v["검토상태"], "검토자": v["검토자"],
+        "입력 완료": ["-" if r.테스트여부 else ("입력 필요" if review_missing(r) else "완료") for r in v.itertuples()],
+        "테스트": v["테스트여부"].map({1: "TEST", 0: ""}),
+    }, columns=BOARD_COLUMNS)
+    return out.reset_index(drop=True)
+
+
 def board_summary(tl):
     """게시판 목록용 값 (REQ-06): (최고 등급, 확인 필요 건수). 저장할 때 같이 넣는다."""
     cands, _, _ = derive(tl)

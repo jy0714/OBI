@@ -144,3 +144,28 @@ def test_req08_review_required_rules():
     assert p.review_missing(full) == []
     assert p.review_missing(dict(full, 코멘트="   ")) == ["Comment 및 확인 결과"]
     assert p.review_missing({"인터뷰여부": "예"}) != []                           # 옛 이력(테스트여부 없음) = 정식
+
+
+# --- REQ-06 분석 이력 게시판 ---------------------------------------------------
+def test_req06_board_filters(tmp_path, monkeypatch, sample):
+    from datetime import date
+    import obi_pipeline as p
+    import obi_store as store
+    monkeypatch.setattr(store, "DB_PATH", str(tmp_path / "b.db"))
+    store.init_db()
+    real = p.save(sample["result"])
+    test = p.save(sample["result"], test=True)
+    old = store.save_analysis(dict(sample["result"]["info"], 이름="옛이력"), [], sample["result"]["summary"],
+                              sample["result"]["timeline"].iloc[0:0])     # 등급·건수 없는 옛 이력 흉내
+    df = store.list_analyses()
+
+    v = p.board(df)
+    assert list(v.columns) == p.BOARD_COLUMNS
+    assert v["이력#"].tolist() == [old, real]                      # 최신순, Test 제외
+    assert v.set_index("이력#").loc[real, "입력 완료"] == "입력 필요"
+    assert test in p.board(df, include_test=True)["이력#"].tolist()
+    top = sample["cands"]["등급"].iloc[0]
+    assert p.board(df, grades=[top])["이력#"].tolist() == [real]
+    assert p.board(df, grades=[p.NO_GRADE])["이력#"].tolist() == [old]
+    assert p.board(df, q="옛이")["이력#"].tolist() == [old]
+    assert p.board(df, date_to=date(2000, 1, 1)).empty

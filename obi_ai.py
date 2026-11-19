@@ -79,7 +79,7 @@ def mock_analyze(tl):
     rows = []
     for n, (_, ids) in enumerate(sorted(_cluster(tl).items()), start=1):
         g = tl[tl["이벤트ID"].isin(ids)].sort_values("시간")
-        reasons = " ".join(g["점검사유"].fillna(""))
+        codes = {c for x in g["점검사유"].fillna("") for c in crit.codes_of(x)}
         names = " ".join(g["대상"].fillna("").astype(str) + " " + g["상세"].fillna("").astype(str))
         channels = list(dict.fromkeys(g["채널"]))
 
@@ -91,9 +91,9 @@ def mock_analyze(tl):
         else:
             sens, sens_why = "낮음", "파일명만으로는 자료 성격을 알기 어려움"
 
-        if "B2" in reasons or "B4" in reasons:
+        if codes & {"B2", "B4"}:
             ctx, ctx_why = "높음", "개인메일·개인 클라우드 등 업무 경로가 아닌 곳으로 이동"
-        elif "R2" in reasons or "R3" in reasons or "R6" in reasons:
+        elif codes & {"R2", "R3", "R6"}:
             ctx, ctx_why = "낮음", "사내·거래처·공공기관 등 업무 경로"
         else:
             ctx, ctx_why = "중간", "업무 범위인지 부서 확인이 필요"
@@ -121,7 +121,7 @@ def mock_analyze(tl):
 
         first, last = g["시간"].min(), g["시간"].max()
         span = _fmt_time(first) + (f" ~ {_fmt_time(last)}" if len(g) > 1 else "")
-        checks = sorted({m for m in re.findall(r"\b[BR]\d\b", reasons)})
+        checks = sorted((c for c in codes if c[0] in "BR"), key=lambda c: (c[0], int(c[1:])))   # B2 < B10
         rows.append(dict(
             후보ID=f"C{n:02d}", 위험점수=score_candidate(levels),
             유형=_title(levels, channels, g),

@@ -98,6 +98,15 @@ def _stem(name):
     return re.sub(r"\.[a-z][a-z0-9]{0,7}$", "", s).strip()
 
 
+_CODE_RE = re.compile(r"(?:^|\| )([BRA]\d+) ")
+
+
+def codes_of(reasons):
+    """점검사유 문자열 'B1 보안등급 키워드(…) | R6 …' → 코드 목록 ['B1', 'R6'] (B10 등 두 자리 포함).
+    각 사유 항목 맨 앞의 코드만 읽어 파일명 속 'B2' 같은 글자는 무시한다."""
+    return list(dict.fromkeys(_CODE_RE.findall(str(reasons or ""))))
+
+
 def _is_ambiguous(name):
     st = _stem(name)
     return bool(st) and any(re.search(p, st) for p in AMBIGUOUS_NAME_PATTERNS)

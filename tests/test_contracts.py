@@ -3,7 +3,6 @@
 골든 비교는 "무엇이 바뀌었나"를, 이 파일은 "바뀌어도 되는 범위 안인가"를 본다.
 LLM 으로 mock_analyze / mock_insights 를 교체해도 이 테스트는 그대로 통과해야 한다.
 """
-import re
 
 import pandas as pd
 
@@ -46,7 +45,7 @@ def test_timeline_values(sample):
 def test_check_codes_consistent(sample):
     """점검사유의 코드는 모두 정의된 코드이고, B 코드가 있을 때만 '확인 필요'"""
     for _, r in sample["tl"].iterrows():
-        codes = re.findall(r"(?:^|\| )([BRA]\d) ", str(r["점검사유"] or ""))
+        codes = crit.codes_of(r["점검사유"])
         assert all(c in crit.ALL_LABELS for c in codes), r["점검사유"]
         expected = "확인 필요" if any(c.startswith("B") for c in codes) else ("참고" if codes else "")
         assert (r["점검결과"] or "") == expected, (r["이벤트ID"], r["점검사유"])

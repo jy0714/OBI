@@ -73,3 +73,9 @@ def test_file_list_roundtrip():
     assert prep.split_files(s) == ["a, b.xlsx", "c.pdf"]
     assert prep.split_files(None) == [] and prep.split_files(float("nan")) == []
     assert prep.split_files(["x", " "]) == ["x"]
+
+
+def test_codes_of_two_digit_and_filename_safe():
+    s = "B1 보안등급 키워드(대외비) | B10 대용량 전송(150.0MB) | R6 사내·승인 서비스(B2B_계약.pdf)"
+    assert crit.codes_of(s) == ["B1", "B10", "R6"]
+    assert crit.codes_of("") == [] and crit.codes_of(None) == []

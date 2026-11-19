@@ -176,3 +176,39 @@ def test_req10_person_sources():
     person = {"이름": "홍길동", "직급": "선임", "부서": ""}
     assert p.person_sources(person, {"이름": "홍길동", "직급": "책임", "부서": "보안팀"}) == \
         {"이름": "로그", "직급": "수정", "부서": "직접"}
+
+
+# --- REQ-02 채널·추이 대시보드 -------------------------------------------------
+def test_req02_dashboard_matches_timeline(sample):
+    import obi_criteria as crit
+    import obi_pipeline as p
+    tl, d = sample["tl"], sample["dashboard"]
+    timed = tl[tl["시간"].notna()]
+    assert d["daily"]["건수"].sum() == len(timed)
+    assert d["need"]["확인필요"].sum() == int((timed["점검결과"] == "확인 필요").sum())
+    by_ch = d["daily"].groupby("채널")["건수"].sum().to_dict()
+    assert by_ch == timed["채널"].value_counts().to_dict()
+    assert round(d["bytes"]["MB"].sum(), 0) == round(crit.transfer_bytes(timed).sum() / crit.MB, 0)
+    assert d["offhours"]["업무시간외"].sum() == int((timed["업무시간외"] == "Y").sum())
+    assert d["markers"].set_index("이름")["날짜"].to_dict() == \
+        {"최근 기간 시작": "2026-08-03", "기준일": "2026-09-02", "퇴직일": "2026-09-30"}
+    assert set(d["compare"]["기간"]) == {"평소", "최근"}
+    day = d["dates"][0]
+    assert len(p.events_on(tl, day)) == d["daily"][d["daily"]["날짜"] == day]["건수"].sum()
+
+
+def test_req02_dashboard_empty():
+    import pandas as pd
+    import obi_pipeline as p
+    d = p.dashboard(pd.DataFrame())
+    assert d["daily"].empty and d["dates"] == []
+
+
+def test_req02_charts_build(sample):
+    """차트 사양이 만들어지고, 채널 색이 고정 순서를 따른다"""
+    import obi_charts as c
+    d = sample["dashboard"]
+    for fn in (c.daily_activity, c.recent_vs_usual, c.off_hours_share, c.daily_bytes):
+        assert fn(d).to_dict()
+    spec = str(c.daily_activity(d).to_dict())
+    assert all(col in spec for col in c.CHANNEL_COLORS) and c.NEED_COLOR in spec

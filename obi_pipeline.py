@@ -166,6 +166,8 @@ def events_of(tl, ids):
     """'E0001, E0002' 또는 list → 해당 이벤트 원본 로그 행"""
     if isinstance(ids, str):
         ids = [x.strip() for x in ids.split(",") if x.strip()]
+    if "이벤트ID" not in tl:
+        return tl.iloc[0:0]
     return tl[tl["이벤트ID"].isin(ids)]
 
 
@@ -239,6 +241,66 @@ def save(result, *, test=False, sources=None):
     top, need = board_summary(result["timeline"])
     return store.save_analysis(result["info"], result["checks"], result["summary"], result["timeline"],
                                result["criteria"], test=test, top_grade=top, need_count=need, sources=sources)
+
+
+def dashboard(tl, summary=None, base_date="", retire_date=""):
+    """REQ-02 채널·추이 대시보드 집계. 화면(Altair)은 이 값만 그린다.
+
+    돌려주는 dict:
+      daily     날짜·채널·구분(확인 필요/일반)·건수  — 채널별 누적 막대
+      need      날짜·확인필요                          — 확인 필요 선
+      bytes     날짜·채널·MB                           — 일자별 전송 용량 (REQ-01 과 같은 기준)
+      compare   채널·기간(평소/최근)·30일환산          — 평소 대비 최근
+      offhours  채널·전체·업무시간외·비중(%)
+      markers   이름·날짜                              — 최근 기간 시작일·기준일·퇴직일 세로선
+      dates     활동이 있는 날짜 목록 (최근 → 과거)
+    """
+    empty = dict(daily=pd.DataFrame(columns=["날짜", "채널", "구분", "건수"]),
+                 need=pd.DataFrame(columns=["날짜", "확인필요"]),
+                 bytes=pd.DataFrame(columns=["날짜", "채널", "MB"]),
+                 compare=pd.DataFrame(columns=["채널", "기간", "30일환산"]),
+                 offhours=pd.DataFrame(columns=["채널", "전체", "업무시간외", "비중(%)"]),
+                 markers=pd.DataFrame(columns=["이름", "날짜"]), dates=[])
+    if tl.empty or "시간" not in tl or tl["시간"].notna().sum() == 0:
+        return empty
+    t = tl[tl["시간"].notna()].copy()
+    t["날짜"] = t["시간"].dt.strftime("%Y-%m-%d")
+    t["구분"] = t["점검결과"].fillna("").map(lambda x: "확인 필요" if x == "확인 필요" else "일반")
+
+    daily = t.groupby(["날짜", "채널", "구분"]).size().reset_index(name="건수")
+    need = (t[t["구분"] == "확인 필요"].groupby("날짜").size().reindex(sorted(t["날짜"].unique()), fill_value=0)
+            .rename("확인필요").reset_index())
+    sent = crit.transfer_bytes(t)
+    b = t.assign(MB=sent / crit.MB)[sent > 0]
+    by = b.groupby(["날짜", "채널"])["MB"].sum().round(1).reset_index()
+
+    compare = empty["compare"]
+    if summary is not None and len(summary) and {"평소_30일환산", "최근_30일환산"} <= set(summary.columns):
+        compare = (summary.melt(id_vars="채널", value_vars=["평소_30일환산", "최근_30일환산"],
+                                var_name="기간", value_name="30일환산")
+                   .assign(기간=lambda d: d["기간"].map({"평소_30일환산": "평소", "최근_30일환산": "최근"})))
+    off = t.groupby("채널").agg(전체=("이벤트ID", "count"),
+                               업무시간외=("업무시간외", lambda s: int((s.fillna("") == "Y").sum()))).reset_index()
+    off["비중(%)"] = (off["업무시간외"] / off["전체"] * 100).round(1)
+
+    marks = []
+    base = pd.to_datetime(base_date, errors="coerce")
+    if pd.notna(base):
+        marks.append(("최근 기간 시작", (base - pd.Timedelta(days=prep.RECENT_DAYS)).strftime("%Y-%m-%d")))
+        marks.append(("기준일", base.strftime("%Y-%m-%d")))
+    retire = pd.to_datetime(retire_date, errors="coerce")
+    if pd.notna(retire):
+        marks.append(("퇴직일", retire.strftime("%Y-%m-%d")))
+    return dict(daily=daily, need=need, bytes=by, compare=compare, offhours=off,
+                markers=pd.DataFrame(marks, columns=["이름", "날짜"]),
+                dates=sorted(t["날짜"].unique(), reverse=True))
+
+
+def events_on(tl, day):
+    """'YYYY-MM-DD' 그날의 이벤트"""
+    if tl.empty or "시간" not in tl:
+        return tl
+    return tl[tl["시간"].dt.strftime("%Y-%m-%d") == day]
 
 
 def derive(tl):

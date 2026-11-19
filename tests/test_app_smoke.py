@@ -112,3 +112,26 @@ def test_req10_upload_prefills_and_user_edit_wins(temp_db, tmp_path):
     a = store.get_analysis(aid)
     assert (a["이름"], a["직급"], a["원본파일명"], a["테스트여부"]) == ("홍길동", "책임", "로그.xlsx", 1)
     assert a["인적사항출처"] == {"이름": "로그", "직급": "수정", "부서": "직접"}
+
+
+def test_req02_dashboard_renders_and_day_pick(temp_db, sample):
+    import obi_pipeline as pipeline
+    aid = pipeline.save(sample["result"])
+    at = AppTest.from_file(APP, default_timeout=60)
+    at.session_state["current_id"] = aid
+    at.run()
+    day = sample["dashboard"]["dates"][0]
+    at.selectbox(key="new_day").set_value(day).run()
+    assert not at.exception, at.exception
+    assert any("일자별 활동" in m.value for m in at.markdown)
+
+
+def test_req02_dashboard_empty_history(temp_db, sample):
+    r = sample["result"]
+    import pandas as pd
+    aid = store.save_analysis(r["info"], r["checks"], pd.DataFrame(), r["timeline"].iloc[0:0], pd.DataFrame())
+    at = AppTest.from_file(APP, default_timeout=60)
+    at.session_state["current_id"] = aid
+    at.run()
+    assert not at.exception, at.exception
+    assert any("표시할 추이가 없습니다" in i.value for i in at.info)

@@ -12,6 +12,7 @@ import pandas as pd
 import streamlit as st
 
 import obi_ai as ai
+import obi_charts as charts
 import obi_pipeline as pipeline
 import obi_store as store
 
@@ -160,6 +161,48 @@ def selectable_table(df, tl, key, ids_col, caption="행을 누르면 원본 로�
         st.caption(caption)
 
 
+def render_dashboard(tl, a, key):
+    """REQ-02 채널·추이 대시보드 (집계는 pipeline.dashboard, 차트는 obi_charts)"""
+    d = pipeline.dashboard(tl, a["채널요약"], a["기준일"], a["퇴직일자"])
+    if d["daily"].empty:
+        st.info("시간이 기록된 이벤트가 없어 표시할 추이가 없습니다.")
+        return
+
+    st.markdown("##### 일자별 활동")
+    st.altair_chart(charts.daily_activity(d), width="stretch")
+    st.caption("막대: 채널별 건수 · 빨간 점: 그날의 확인 필요 건수 · 점선: "
+               + " / ".join(f"{r.이름} {r.날짜}" for r in d["markers"].itertuples()))
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.markdown("###### 평소 대비 최근 (30일 환산 건수)")
+        if d["compare"].empty:
+            st.caption("채널 요약이 없습니다.")
+        else:
+            st.altair_chart(charts.recent_vs_usual(d), width="stretch")
+    with c2:
+        st.markdown("###### 업무시간 외 비중 (%)")
+        st.altair_chart(charts.off_hours_share(d), width="stretch")
+    with c3:
+        st.markdown("###### 일자별 전송 용량 (MB)")
+        if d["bytes"].empty:
+            st.caption("전송 용량 기록이 없습니다.")
+        else:
+            st.altair_chart(charts.daily_bytes(d), width="stretch")
+
+    # 날짜를 고르면 그날의 이벤트 (REQ-09)
+    counts = d["daily"].groupby("날짜")["건수"].sum()
+    needs = d["need"].set_index("날짜")["확인필요"]
+    day = st.selectbox("날짜를 고르면 그날의 이벤트가 나옵니다", [None] + d["dates"], key=f"{key}_day",
+                       format_func=lambda x: "날짜 선택" if x is None else
+                       f"{x} · {counts.get(x, 0)}건" + (f" (확인 필요 {needs.get(x, 0)})" if needs.get(x, 0) else ""))
+    if day:
+        st.dataframe(pipeline.events_on(tl, day).reindex(columns=RAW_COLUMNS), hide_index=True, width="stretch")
+    with st.expander("채널 요약 표"):
+        st.dataframe(a["채널요약"], hide_index=True, width="stretch")
+        st.caption("평소 기간은 약 5개월이라 30일 평균으로 맞춰 최근 30일과 비교합니다. 건수가 적으면 차이가 과장될 수 있습니다.")
+
+
 def candidate_card(r, tl, key):
     with st.container(border=True):
         st.markdown(chip(f"{GRADE_ICON.get(r.등급, '')} {r.등급}", r.등급) +
@@ -173,7 +216,7 @@ def candidate_card(r, tl, key):
                  for k, v in r.판단.items()]),
                 hide_index=True, width="stretch")
             ids = [x.strip() for x in r.근거이벤트.split(",")]
-            st.dataframe(tl[tl["이벤트ID"].isin(ids)].reindex(
+            st.dataframe(pipeline.events_of(tl, ids).reindex(
                 columns=["이벤트ID", "시간", "채널", "행위", "대상", "수신자", "점검사유", "원본시트", "원본행"]),
                 hide_index=True, width="stretch")
 
@@ -277,7 +320,7 @@ def render_detail(analysis_id, key):
                 ids = [x.strip() for x in r.이벤트ID.split(",")]
                 with st.expander(f"⚠️ {r.항목} · {len(ids)}건" + (f" · {r.비고}" if r.비고 else ""), expanded=False):
                     st.caption(r.기준)
-                    st.dataframe(tl[tl["이벤트ID"].isin(ids)].reindex(columns=show_cols), hide_index=True, width="stretch")
+                    st.dataframe(pipeline.events_of(tl, ids).reindex(columns=show_cols), hide_index=True, width="stretch")
             if len(miss):
                 st.success("해당 없음: " + " · ".join(miss["항목"]))
             with st.expander(f"참고 관찰 {len(ref)}건 (우선 검토 제외, 숨기지 않음)"):
@@ -306,19 +349,7 @@ def render_detail(analysis_id, key):
 
     # ---------------- 채널·추이 ----------------
     with t_sum:
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("##### 채널별 건수")
-            if len(tl):
-                pivot = pd.crosstab(tl["채널"], tl["점검결과"].replace("", "일반"))
-                st.bar_chart(pivot, height=260)
-        with c2:
-            st.markdown("##### 일자별 활동")
-            if "날짜" in tl or "시간" in tl:
-                daily = tl.assign(날짜=pd.to_datetime(tl["시간"]).dt.date).groupby("날짜").size()
-                st.line_chart(daily, height=260)
-        st.dataframe(a["채널요약"], hide_index=True, width="stretch")
-        st.caption("평소 기간은 약 5개월이라 30일 평균으로 맞춰 최근 30일과 비교합니다. 건수가 적으면 차이가 과장될 수 있습니다.")
+        render_dashboard(tl, a, key)
 
     # ---------------- AI 분석 (LLM 연동) ----------------
     with t_llm:

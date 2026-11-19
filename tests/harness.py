@@ -111,7 +111,8 @@ def execute(xlsx, retire_date, base_date=None, account=None, info=None):
     prompt = ai.build_llm_prompt(a, crit, cands, tl)
     return dict(result=r, excel=excel, analysis=a, tl=tl, crit=crit, cands=cands,
                 lead=lead, points=points, prompt=prompt, personal_mail=pipeline.personal_mail(tl),
-                key_files=pipeline.key_files(tl, cands))
+                key_files=pipeline.key_files(tl, cands),
+                dashboard=pipeline.dashboard(tl, a["채널요약"], a["기준일"], a["퇴직일자"]))
 
 
 def render(x):
@@ -128,6 +129,7 @@ def render(x):
         "한눈에보기": {"lead": lead, "points": points},
         "개인메일발송": frame(x["personal_mail"]),
         "주요검토파일": frame(x["key_files"]),
+        "대시보드": {k: (frame(v) if isinstance(v, pd.DataFrame) else v) for k, v in x["dashboard"].items()},
     }
     schema = {
         **{f"excel:{n}": v["columns"] for n, v in excel.items()},
@@ -137,6 +139,8 @@ def render(x):
         "app:검토후보": [str(c) for c in cands.columns],
         "app:개인메일발송": [str(c) for c in x["personal_mail"].columns],
         "app:주요검토파일": [str(c) for c in x["key_files"].columns],
+        **{f"app:대시보드.{k}": [str(c) for c in v.columns]
+           for k, v in x["dashboard"].items() if isinstance(v, pd.DataFrame)},
         "app:검토후보.판단_keys": sorted({k for d in cands.get("판단", []) for k in d}) if len(cands) else [],
     }
     return {"schema.json": dumps(schema), "excel.json": dumps(excel),

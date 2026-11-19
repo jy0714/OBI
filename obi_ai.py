@@ -14,6 +14,7 @@ import pandas as pd
 import requests
 
 import obi_criteria as crit
+import obi_preprocess as prep
 
 # 위험 점수 배점 (AI 65 : 코드 35)
 WEIGHTS = {
@@ -56,12 +57,15 @@ def _cluster(tl):
         for other in re.split(r",\s*", str(r.get("중복기록") or "")):
             if other in parent:
                 union(r["이벤트ID"], other)
-    # 같은 파일을 반복한 행위도 한 사건으로 묶는다
+    # 같은 파일을 반복한 행위도 한 사건으로 묶는다.
+    # '대상'(URL·메일 제목)이 아니라 실제 파일명 목록을 정규화(file_key)해 비교한다.
+    # (예전에는 URL 끝 'upload' 가 같다는 이유로 서로 다른 사이트가 한 사건이 됐다)
     by_file = {}
     for _, r in target.iterrows():
-        k = crit._stem(r.get("대상"))
-        if k and len(k) >= 4:
-            by_file.setdefault(k, []).append(r["이벤트ID"])
+        for f in prep.split_files(r.get("파일목록")):
+            k = prep.file_key(f)
+            if k:
+                by_file.setdefault(k, []).append(r["이벤트ID"])
     for ids in by_file.values():
         for other in ids[1:]:
             union(ids[0], other)

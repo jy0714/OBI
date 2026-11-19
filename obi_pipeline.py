@@ -7,6 +7,8 @@ app.py 와 하네스(tests/harness.py)가 모두 이 함수들을 거친다.
     analyze_file()  : 로그 엑셀 → 전처리 → 결과 엑셀을 다시 읽어 저장용 묶음 생성
     derive()        : (저장 후 불러온) 타임라인 → 검토 후보·한눈에 보기 요약
 """
+import re
+
 import pandas as pd
 
 import obi_ai as ai
@@ -84,6 +86,78 @@ def personal_mail(tl):
     df["_참고"] = df["점검결과"] != "확인 필요"
     return (df.sort_values(["_무첨부", "_참고", "시각"], kind="stable")
             .drop(columns=["_무첨부", "_참고"]).reset_index(drop=True))
+
+
+KEY_FILE_COLUMNS = ["파일명", "등급", "근거", "채널", "횟수", "최초 시각", "최종 시각", "나간 곳", "용량", "근거 이벤트ID"]
+
+
+def _destination(r):
+    ch = r["채널"]
+    if ch == "이메일":
+        return str(r.get("수신자") or "")
+    if ch in ("웹 업로드", "USB(DLP)"):
+        return str(r.get("대상") or "")
+    m = re.search(r"(장치|프린터): ([^|]*)", str(r.get("상세") or ""))
+    return m.group(2).strip() if m else ""
+
+
+def key_files(tl, cands):
+    """REQ-03 주요 검토 파일: '확인 필요' 이벤트에 나온 파일을 file_key() 로 묶은 파일 단위 표 (등급 순)."""
+    if tl.empty or "점검결과" not in tl:
+        return pd.DataFrame(columns=KEY_FILE_COLUMNS)
+    grade_of_event = {}
+    for r in cands.itertuples() if len(cands) else []:
+        for e in r.근거이벤트.split(", "):
+            grade_of_event[e] = r.등급
+
+    groups = {}
+    for _, r in tl[tl["점검결과"].fillna("") == "확인 필요"].iterrows():
+        files = prep.split_files(r.get("파일목록"))
+        for f in files:
+            name = prep.file_basename(f)
+            k = prep.file_key(f) or name.lower()          # 너무 짧아 키가 없으면 파일명 그대로
+            g = groups.setdefault(k, dict(names={}, events=[]))
+            g["names"][name] = g["names"].get(name, 0) + 1
+            g["events"].append((r, len(files)))
+
+    rows = []
+    for g in groups.values():
+        evs = [r for r, _ in g["events"]]
+        ids = list(dict.fromkeys(r["이벤트ID"] for r in evs))
+        times = pd.Series([r["시간"] for r in evs]).dropna()
+        reasons = list(dict.fromkeys(seg.strip() for r in evs for seg in str(r["점검사유"] or "").split("|")
+                                     if seg.strip()))
+        grades = [grade_of_event.get(e, "") for e in ids]
+        # 파일 1개짜리 이벤트의 용량만 파일 용량으로 본다 (첨부 여러 개인 메일 합계는 제외)
+        sizes = [pd.to_numeric(r.get("용량_bytes"), errors="coerce") for r, n in g["events"] if n == 1]
+        sizes = [s for s in sizes if pd.notna(s) and s > 0]
+        rows.append({
+            # 버전·번호만 다른 이름(현장영상_01~06)도 같은 파일로 묶이므로 개수를 함께 보여 준다
+            "파일명": max(g["names"].items(), key=lambda kv: kv[1])[0]
+                     + (f" 외 {len(g['names']) - 1}개" if len(g["names"]) > 1 else ""),
+            "등급": min(grades, key=ai.grade_rank) if grades else "",
+            "근거": " | ".join(reasons),
+            "채널": ", ".join(dict.fromkeys(r["채널"] for r in evs)),
+            "횟수": len(ids),
+            "최초 시각": times.min() if len(times) else pd.NaT,
+            "최종 시각": times.max() if len(times) else pd.NaT,
+            "나간 곳": ", ".join(d for d in dict.fromkeys(_destination(r) for r in evs) if d),
+            "용량": crit.fmt_size(max(sizes)) if sizes else "",
+            "근거 이벤트ID": ", ".join(ids),
+        })
+    df = pd.DataFrame(rows, columns=KEY_FILE_COLUMNS)
+    if df.empty:
+        return df
+    df["_등급순"] = df["등급"].map(ai.grade_rank)
+    return (df.sort_values(["_등급순", "최초 시각"], kind="stable", na_position="last")
+            .drop(columns="_등급순").reset_index(drop=True))
+
+
+def events_of(tl, ids):
+    """'E0001, E0002' 또는 list → 해당 이벤트 원본 로그 행"""
+    if isinstance(ids, str):
+        ids = [x.strip() for x in ids.split(",") if x.strip()]
+    return tl[tl["이벤트ID"].isin(ids)]
 
 
 def derive(tl):

@@ -135,6 +135,25 @@ def _ai_cfg():
 # ---------------------------------------------------------------------------
 # 분석 상세 (새 분석 직후와 이력 조회에서 공통 사용)
 # ---------------------------------------------------------------------------
+RAW_COLUMNS = ["이벤트ID", "시간", "채널", "행위", "대상", "수신자", "파일목록", "점검사유", "원본시트", "원본행"]
+
+
+def selectable_table(df, tl, key, ids_col, caption="행을 누르면 원본 로그가 아래에 나옵니다.", height=None):
+    """행을 누르면 그 행의 근거 이벤트 원본 로그를 보여 주는 표 (REQ-03·05·09)"""
+    opts = dict(hide_index=True, width="stretch", on_select="rerun", selection_mode="single-row", key=key)
+    if height:
+        opts["height"] = height
+    event = st.dataframe(df, **opts)
+    rows = event.selection.rows if event else []
+    if rows:
+        picked = df.iloc[rows[0]]
+        st.markdown(f"**원본 로그** · {picked[ids_col]}")
+        st.dataframe(pipeline.events_of(tl, picked[ids_col]).reindex(columns=RAW_COLUMNS),
+                     hide_index=True, width="stretch")
+    elif caption:
+        st.caption(caption)
+
+
 def candidate_card(r, tl, key):
     with st.container(border=True):
         st.markdown(chip(f"{GRADE_ICON.get(r.등급, '')} {r.등급}", r.등급) +
@@ -189,6 +208,15 @@ def render_detail(analysis_id, key):
         st.markdown(f"<div class='obi-lead'>{lead_text}</div>", unsafe_allow_html=True)
         for p in points:
             st.markdown(f"- {p}")
+
+    # ---------------- 주요 검토 파일 (REQ-03) ----------------
+    files = pipeline.key_files(tl, cands)
+    with st.container(border=True):
+        st.markdown(f"##### 주요 검토 파일 · {len(files)}개")
+        if files.empty:
+            st.caption("확인 필요 행위에 등장한 파일이 없습니다.")
+        else:
+            selectable_table(files, tl, f"{key}_files", "근거 이벤트ID")
 
     t_ai, t_main, t_tl, t_sum, t_llm = st.tabs(
         [f"검토 후보 ({len(cands)})", "기준 점검", "통합타임라인", "채널·추이", "AI 분석"])

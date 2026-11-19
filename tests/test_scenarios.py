@@ -110,3 +110,25 @@ def test_req10_extract_from_sample(tmp_path):
     # 같은 workbook 으로 분석 (다시 읽지 않음)
     r = obi_pipeline.analyze_file(xls, str(tmp_path / "o.xlsx"), {"퇴직일자": "2026-09-30"}, "2026-09-02")
     assert len(r["timeline"]) > 0
+
+
+# --- REQ-03 주요 검토 파일 ----------------------------------------------------
+def test_req03_design_drawing_one_row(sample):
+    kf = sample["key_files"]
+    rows = kf[kf["파일명"].str.contains("설계도면_v2.dwg", regex=False)]
+    assert len(rows) == 1
+    r = rows.iloc[0]
+    assert r["채널"] == "USB, USB(DLP)" and r["횟수"] == 3
+    assert "B5" in r["근거"] and "B3" in r["근거"]
+    assert r["등급"] in ("Critical", "Medium", "Low")
+
+
+def test_req03_sorted_by_grade_and_only_flagged(sample):
+    import obi_ai as ai
+    kf, tl = sample["key_files"], sample["tl"]
+    ranks = kf["등급"].map(ai.grade_rank).tolist()
+    assert ranks == sorted(ranks)
+    flagged = set(tl.loc[tl["점검결과"] == "확인 필요", "이벤트ID"])
+    for ids in kf["근거 이벤트ID"]:
+        assert set(ids.split(", ")) <= flagged
+    assert "현장영상_01.mp4 외 5개" in kf["파일명"].tolist()

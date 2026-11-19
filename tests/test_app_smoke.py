@@ -38,6 +38,7 @@ def test_detail_renders_sample(temp_db, sample):
     assert not any("점수" in label for label in metrics)
     shown = " ".join(str(m.value) for m in at.markdown) + " ".join(str(c.value) for c in at.caption)
     assert "점수" not in shown
+    assert any("주요 검토 파일" in m.value for m in at.markdown)          # REQ-03
     labels = [t.label for t in at.tabs]
     for name in ("기준 점검", "통합타임라인", "채널·추이", "AI 분석"):
         assert name in labels

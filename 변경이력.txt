@@ -183,3 +183,24 @@ OBI (Offboarding Inspector) 코드 변경 이력
   - tests/golden/sample/        : 기준 결과 (schema / excel / app / prompt)
   - tests/test_*.py             : 골든·형식 계약·단위·LLM 스트리밍 파서·화면 스모크 (51개)
   - pytest.ini, requirements.txt, requirements-dev.txt, .gitignore(tests/_out, tests/local, *.zip)
+
+
+================================================================
+2026-11-19 (오후)  요구사항 반영 — OBI_requirements_2026-11-19.md
+================================================================
+커밋 단위로 나눠 반영 (git log 참고). 결정 필요 항목은 임시 기본값 + 상수로 구현.
+
+  P-1  타임라인에 파일목록 저장 (줄바꿈 구분)
+  P-2  두 자리 점검 코드 (codes_of)
+  P-3  사건 묶기 오탐 수정 (파일목록 + file_key)
+  REQ-01 대용량 전송 B10 (단일 100MB / 하루 500MB) + snapshot 용량 분포 출력
+  REQ-02 채널·추이 대시보드 (obi_charts.py)
+  REQ-03 주요 검토 파일
+  REQ-04 점수 대신 등급 Critical/Medium/Low (내부 점수는 정렬용)
+  REQ-05 개인메일 발송 영역·지표, B2 등급 반영
+  REQ-06 분석 이력 게시판 (WAL, 삭제 표시)
+  REQ-07 리포트는 버튼으로만 생성 (obi_report.py), AI 의견 DB 저장
+  REQ-08 Test 모드, 정식 이력 검토 입력 필수
+  REQ-09 게시판 행 클릭 → 상세, 상세 안 행 클릭 → 원본 로그
+  REQ-10 업로드 즉시 이름·직급(·부서) 자동 입력, 출처 기록
+  DB    컬럼 추가 (기존 DB 자동 마이그레이션)

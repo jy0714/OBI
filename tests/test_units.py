@@ -65,3 +65,11 @@ def test_off_hours():
 ])
 def test_ambiguous_names(name, ambiguous):
     assert crit._is_ambiguous(name) is ambiguous
+
+
+def test_file_list_roundtrip():
+    s = prep.join_files(["a, b.xlsx", None, float("nan"), " c.pdf ", "a, b.xlsx", ""])
+    assert s == "a, b.xlsx\nc.pdf"                 # 쉼표가 든 파일명도 보존
+    assert prep.split_files(s) == ["a, b.xlsx", "c.pdf"]
+    assert prep.split_files(None) == [] and prep.split_files(float("nan")) == []
+    assert prep.split_files(["x", " "]) == ["x"]

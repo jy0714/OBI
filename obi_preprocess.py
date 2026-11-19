@@ -109,6 +109,30 @@ def file_type(name):
     return "기타" if ext else ""
 
 
+FILE_SEP = "\n"   # 파일명에 쉼표가 들어갈 수 있어 줄바꿈으로 구분해 저장
+
+
+def join_files(files):
+    """파일명 목록 → 저장용 문자열 (빈 값·NaN 제외, 순서 유지, 중복 제거)"""
+    out = []
+    for f in files or []:
+        if f is None or (isinstance(f, float) and pd.isna(f)):
+            continue
+        s = str(f).strip()
+        if s and s not in out:
+            out.append(s)
+    return FILE_SEP.join(out)
+
+
+def split_files(value):
+    """저장된 파일목록 문자열(또는 이미 list) → 파일명 list"""
+    if isinstance(value, (list, tuple)):
+        return [str(x).strip() for x in value if str(x).strip()]
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return []
+    return [x.strip() for x in str(value).split(FILE_SEP) if x.strip()]
+
+
 def file_key(name):
     """교차 채널 비교용 파일 이름 정규화: 접두어·복사본 표시·확장자·기호 제거"""
     s = file_basename(name).lower()
@@ -506,7 +530,9 @@ def run(path_in, path_out, retire_date, base_date=None, person_account=None):
     else:
         daily = pd.DataFrame()
 
-    cols = ["이벤트ID", "시간", "점검결과", "점검사유", "기간", "채널", "행위", "대상", "상세", "파일유형", "용량_bytes",
+    if len(tl):
+        tl["파일목록"] = tl["파일목록"].apply(join_files)
+    cols = ["이벤트ID", "시간", "점검결과", "점검사유", "기간", "채널", "행위", "대상", "상세", "파일목록", "파일유형", "용량_bytes",
             "페이지수", "첨부수", "차단여부", "업무시간외", "최초등장", "개인메일", "승인서비스",
             "동일파일", "중복기록", "당일건수", "수신자", "탐지규칙", "계정", "원본시트", "원본행"]
     tl_out = tl.reindex(columns=cols)

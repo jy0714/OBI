@@ -34,6 +34,7 @@ import pandas as pd  # noqa: E402
 
 import obi_ai as ai  # noqa: E402
 import obi_pipeline as pipeline  # noqa: E402
+import obi_report as report  # noqa: E402
 import obi_store as store  # noqa: E402
 
 GOLDEN_DIR = os.path.join(ROOT, "tests", "golden", "sample")
@@ -141,6 +142,9 @@ def render(x):
         "app:주요검토파일": [str(c) for c in x["key_files"].columns],
         **{f"app:대시보드.{k}": [str(c) for c in v.columns]
            for k, v in x["dashboard"].items() if isinstance(v, pd.DataFrame)},
+        **{f"report:{n}": [str(c) for c in df.columns]
+           for n, df in report.build_report(a, "harness", now="-").items()},
+        "report:요약.항목": report.build_report(a, "harness", now="-")["요약"]["항목"].tolist(),
         "app:검토후보.판단_keys": sorted({k for d in cands.get("판단", []) for k in d}) if len(cands) else [],
     }
     return {"schema.json": dumps(schema), "excel.json": dumps(excel),

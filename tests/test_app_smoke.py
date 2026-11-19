@@ -135,3 +135,46 @@ def test_req02_dashboard_empty_history(temp_db, sample):
     at.run()
     assert not at.exception, at.exception
     assert any("표시할 추이가 없습니다" in i.value for i in at.info)
+
+
+def test_req07_report_only_on_click_and_ai_persisted(temp_db, sample):
+    import obi_pipeline as pipeline
+    # 정식 이력 + 검토 미입력 → 리포트 버튼 비활성, 화면을 열어도 리포트 이력 없음
+    aid = pipeline.save(sample["result"])
+    at = AppTest.from_file(APP, default_timeout=60)
+    at.session_state["current_id"] = aid
+    at.run()
+    assert at.button(key="new_report").disabled
+    assert store.list_reports(aid).empty
+
+    # 검토 입력 완료 → 버튼을 눌렀을 때만 생성·이력 기록
+    store.update_review(aid, "예", "예", "이상 없음", "검토 완료", "김검토")
+    at.run()
+    assert not at.button(key="new_report").disabled and store.list_reports(aid).empty
+    at.button(key="new_report").click().run()
+    assert not at.exception, at.exception
+    assert len(store.list_reports(aid)) == 1
+
+    # AI 의견은 DB 에 있으므로 새 세션(브라우저 새로 열기)에서도 보인다
+    store.save_ai_opinion(aid, "저장된 AI 의견 본문", "ollama", "qwen", "u")
+    fresh = AppTest.from_file(APP, default_timeout=60)
+    fresh.session_state["current_id"] = aid
+    fresh.run()
+    assert any("저장된 AI 의견 본문" in m.value for m in fresh.markdown)
+
+
+def test_req07_ai_request_saves_to_db(temp_db, sample, monkeypatch):
+    """분석 요청 → (가짜 LLM) 스트리밍 → DB 저장 → 다시 요청 시 이전 생성 일시 보존"""
+    import obi_ai
+    import obi_pipeline as pipeline
+    monkeypatch.setattr(obi_ai, "stream_analyze", lambda *a, **k: iter(["**4. 최종 위험 수준** ", "Medium"]))
+    aid = pipeline.save(sample["result"], test=True)
+    at = AppTest.from_file(APP, default_timeout=60)
+    at.session_state["current_id"] = aid
+    at.run()
+    at.button(key="new_llm_run").click().run()
+    assert not at.exception, at.exception
+    a = store.get_analysis(aid)
+    assert a["AI의견"].endswith("Medium") and a["AI프로바이더"] == "ollama"
+    at.button(key="new_llm_run").click().run()                 # 다시 요청
+    assert len(store.get_analysis(aid)["AI이전생성일시"]) == 1

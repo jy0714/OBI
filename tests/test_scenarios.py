@@ -212,3 +212,31 @@ def test_req02_charts_build(sample):
         assert fn(d).to_dict()
     spec = str(c.daily_activity(d).to_dict())
     assert all(col in spec for col in c.CHANNEL_COLORS) and c.NEED_COLOR in spec
+
+
+# --- REQ-07 리포트 --------------------------------------------------------------
+def test_req07_report_content(sample):
+    import io
+    import pandas as pd
+    import obi_report as rep
+    a = dict(sample["analysis"], AI의견="**1. 종합 위험 평가** ...", AI프로바이더="ollama", AI모델="m",
+             AI생성일시="2026-11-19 12:00:00", AI요청자="u")
+    sheets = rep.build_report(a, "검토자A", now="2026-11-19 13:00:00")
+    assert list(sheets)[0] == "요약"
+    assert list(sheets)[1:3] == ["주요 검토 파일", "개인메일 발송"]
+    summary = sheets["요약"].set_index("항목")["내용"]
+    assert summary["최고 등급"] == sample["cands"]["등급"].iloc[0]
+    assert "종합 위험 평가" in summary["AI 의견"] and "검토자A" in summary["리포트 생성"]
+    assert sheets["주요 검토 파일"]["파일명"].str.contains("설계도면_v2.dwg").any()
+    # 숫자 점수 없음 (REQ-04)
+    data = rep.to_xlsx(sheets)
+    book = pd.read_excel(io.BytesIO(data), sheet_name=None)
+    for name, df in book.items():
+        assert "위험점수" not in df.columns, name
+        assert not df.astype(str).apply(lambda c: c.str.contains("위험점수|위험 점수")).any().any(), name
+
+
+def test_req07_report_without_ai(sample):
+    import obi_report as rep
+    s = rep.build_report(sample["analysis"], "u", now="x")["요약"]
+    assert "AI 의견" not in s["항목"].tolist()

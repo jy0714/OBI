@@ -14,6 +14,7 @@ import streamlit as st
 import obi_ai as ai
 import obi_charts as charts
 import obi_pipeline as pipeline
+import obi_report as report
 import obi_store as store
 
 st.set_page_config(page_title="OBI · Offboarding Inspector", page_icon="🛡️", layout="wide",
@@ -353,9 +354,9 @@ def render_detail(analysis_id, key):
 
     # ---------------- AI 분석 (LLM 연동) ----------------
     with t_llm:
+        # AI 의견은 DB 에 저장 → 브라우저를 새로 열어도 보인다 (REQ-07)
         cfg = _ai_cfg()
         provider_label = st.session_state.get("ai_provider", "Ollama (로컬)")
-        result_key = f"ai_result_{analysis_id}"
 
         h1, h2 = st.columns([5, 1])
         h1.markdown(f"##### AI 분석 &nbsp;&nbsp; **{provider_label}** · `{cfg['model']}`")
@@ -363,27 +364,28 @@ def render_detail(analysis_id, key):
         with st.expander("LLM에 전달되는 프롬프트 확인"):
             st.code(ai.build_llm_prompt(a, crit, cands, tl), language="text")
 
-        existing = st.session_state.get(result_key)
-        if existing:
-            st.markdown(existing)
-            if h2.button("다시 요청", key=f"{key}_llm_retry"):
-                del st.session_state[result_key]
+        existing = a["AI의견"]
+        clicked = h2.button("다시 요청" if existing else "분석 요청", key=f"{key}_llm_run",
+                            type="secondary" if existing else "primary")
+        if clicked:
+            try:
+                result = st.write_stream(ai.stream_analyze(cfg, a, crit, cands, tl))
+                store.save_ai_opinion(analysis_id, result, cfg["provider"], cfg["model"],
+                                      st.session_state.get("user", ""))
                 st.rerun()
+            except (ConnectionError, RuntimeError) as e:
+                st.error(str(e))
+            except Exception as e:
+                st.error(f"AI 연동 오류: {e}")
+        elif existing:
+            st.caption(f"{a['AI프로바이더']} · `{a['AI모델']}` · 생성 {a['AI생성일시']} · 요청 {a['AI요청자'] or '-'}"
+                       + (f" · 이전 생성: {', '.join(a['AI이전생성일시'])}" if a["AI이전생성일시"] else ""))
+            st.markdown(existing)
         else:
-            if h2.button("분석 요청", key=f"{key}_llm_run", type="primary"):
-                try:
-                    result = st.write_stream(ai.stream_analyze(cfg, a, crit, cands, tl))
-                    st.session_state[result_key] = result
-                    st.rerun()
-                except (ConnectionError, RuntimeError) as e:
-                    st.error(str(e))
-                except Exception as e:
-                    st.error(f"AI 연동 오류: {e}")
-            else:
-                st.info(
-                    f"**{provider_label}** / `{cfg['model']}` 에게 이 분석 결과를 전달하여 AI 의견을 받습니다.  \n"
-                    "왼쪽 사이드바에서 분석 엔진과 모델을 설정한 뒤 **분석 요청** 버튼을 누르세요."
-                )
+            st.info(
+                f"**{provider_label}** / `{cfg['model']}` 에게 이 분석 결과를 전달하여 AI 의견을 받습니다.  \n"
+                "왼쪽 사이드바에서 분석 엔진과 모델을 설정한 뒤 **분석 요청** 버튼을 누르세요. 받은 의견은 이력에 저장됩니다."
+            )
 
     # ---------------- 검토 입력 ----------------
     st.divider()
@@ -405,12 +407,22 @@ def render_detail(analysis_id, key):
                     store.update_review(analysis_id, interview, pledge, comment, state, reviewer)
                     st.success("저장했습니다.")
                     st.rerun()
+        # 리포트: 버튼을 눌렀을 때만 만든다 (REQ-07). 정식 이력은 검토 입력을 마쳐야 한다 (REQ-08)
         b1, b2 = st.columns([1, 1])
-        b1.download_button(
-            "이 분석 결과 엑셀로 받기",
-            data=to_excel_bytes({"검증결과": pd.DataFrame(a["검증결과"], columns=["확인 항목", "결과", "내용"]),
-                                 "기준점검": crit, "통합타임라인": tl, "채널요약": a["채널요약"]}),
-            file_name=f"OBI_{a['이름']}_{a['퇴직일자']}_#{a['id']}.xlsx", key=f"{key}_dl")
+        report_key = f"report_{analysis_id}"
+        if b1.button("리포트 생성 (엑셀)", key=f"{key}_report", disabled=bool(missing),
+                     help="검토 입력을 마친 뒤 생성할 수 있습니다: " + ", ".join(missing) if missing else None):
+            who = st.session_state.get("user", "")
+            name = report.file_name(a)
+            st.session_state[report_key] = (name, report.to_xlsx(report.build_report(a, who)))
+            store.log_report(analysis_id, who, "xlsx", name)
+        if report_key in st.session_state:
+            name, data = st.session_state[report_key]
+            b1.download_button(f"⬇ {name}", data=data, file_name=name, key=f"{key}_dl")
+        reports = store.list_reports(analysis_id)
+        if len(reports):
+            b1.caption("리포트 생성 이력: " + " · ".join(f"{r.생성일시} {r.생성자}" for r in reports.head(3).itertuples())
+                       + (f" 외 {len(reports) - 3}건" if len(reports) > 3 else ""))
         with b2.popover("이 이력 삭제"):
             if a["테스트여부"]:
                 st.caption("Test 이력은 실제로 지웁니다. 되돌릴 수 없습니다.")

@@ -93,7 +93,7 @@ def col_filled(tl, col):
     return tl[tl[col].fillna("") != ""] if col in tl else tl.iloc[0:0]
 
 
-def run_analysis(uploaded, info, base_date):
+def run_analysis(uploaded, info, base_date, test=False):
     """업로드 파일을 임시 저장 → 전처리 → 이력 자동 저장 → 임시 파일 삭제"""
     suffix = os.path.splitext(uploaded.name)[1] or ".xlsx"
     with tempfile.TemporaryDirectory() as tmp:
@@ -102,7 +102,7 @@ def run_analysis(uploaded, info, base_date):
         with open(src, "wb") as f:
             f.write(uploaded.getbuffer())
         r = pipeline.analyze_file(src, out, info, base_date)
-    return pipeline.save(r)
+    return pipeline.save(r, test=test)
 
 
 # ---------------------------------------------------------------------------
@@ -190,7 +190,11 @@ def render_detail(analysis_id, key):
                 f" · 퇴직일 {a['퇴직일자']}</div>"
                 f"<div class='obi-card-meta'>이력 #{a['id']} · 분석 {a['분석일시']} · 로그 기준일 {a['기준일']}"
                 f" · 계정 {a['계정']} · 로그 검증 {a['검증상태']}</div>", unsafe_allow_html=True)
-    h2.markdown(chip(f"{GRADE_ICON.get(top_grade, '')} 최고 등급 {top_grade}", top_grade), unsafe_allow_html=True)
+    h2.markdown(chip(f"{GRADE_ICON.get(top_grade, '')} 최고 등급 {top_grade}", top_grade)
+                + (chip("TEST", "Low") if a["테스트여부"] else ""), unsafe_allow_html=True)
+    missing = pipeline.review_missing(a)
+    if missing:
+        st.warning("**입력 필요** · 정식 이력은 검토 입력을 마쳐야 합니다 (리포트 생성 불가): " + ", ".join(missing))
 
     pmail = pipeline.personal_mail(tl)
     m = st.columns(6)
@@ -343,7 +347,8 @@ def render_detail(analysis_id, key):
 
     # ---------------- 검토 입력 ----------------
     st.divider()
-    with st.expander("검토 입력 · 이력 저장", expanded=a["검토상태"] != "검토 완료"):
+    with st.expander("검토 입력 · 이력 저장" + (" (Test — 선택 입력)" if a["테스트여부"] else " (필수)"),
+                     expanded=bool(missing) or a["검토상태"] != "검토 완료"):
         with st.form(f"{key}_review"):
             r1, r2, r3, r4 = st.columns(4)
             interview = r1.selectbox("인터뷰 여부", YES_NO, index=YES_NO.index(a["인터뷰여부"]))
@@ -352,9 +357,14 @@ def render_detail(analysis_id, key):
             reviewer = r4.text_input("검토자", value=a["검토자"] or st.session_state.get("user", ""))
             comment = st.text_area("Comment 및 확인 결과", value=a["코멘트"], height=110)
             if st.form_submit_button("검토 내용 저장", type="primary"):
-                store.update_review(analysis_id, interview, pledge, comment, state, reviewer)
-                st.success("저장했습니다.")
-                st.rerun()
+                lack = pipeline.review_missing(dict(테스트여부=a["테스트여부"], 인터뷰여부=interview, 보안서약서=pledge,
+                                                    검토자=reviewer, 코멘트=comment))
+                if lack:
+                    st.error("다음 항목을 입력해야 저장할 수 있습니다: " + ", ".join(lack))
+                else:
+                    store.update_review(analysis_id, interview, pledge, comment, state, reviewer)
+                    st.success("저장했습니다.")
+                    st.rerun()
         b1, b2 = st.columns([1, 1])
         b1.download_button(
             "이 분석 결과 엑셀로 받기",
@@ -393,7 +403,10 @@ def page_new():
             retire = d1.date_input("퇴직(예정)일 *", value=date.today())
             base = d2.date_input("로그 추출일", value=None, help="비워두면 로그의 마지막 날짜를 기준일로 사용합니다")
             uploaded = d3.file_uploader("추출로그 by DDI *", type=["xlsx", "xls"])
-            submitted = st.form_submit_button("분석 실행", type="primary")
+            s1, s2 = st.columns([1, 4])
+            submitted = s1.form_submit_button("분석 실행", type="primary")
+            test = s2.checkbox("Test로 실행", help="검토 입력을 요구하지 않고, 게시판 기본 목록과 기존 양식 내보내기에서 빠집니다. "
+                                                  "Test 이력은 실제 삭제할 수 있습니다.")
 
     if submitted:
         if not uploaded or not name:
@@ -403,7 +416,7 @@ def page_new():
                         원본파일명=uploaded.name, 분석자=st.session_state.get("user", ""))
             with st.spinner("로그를 정리하고 있습니다. 암호화 파일은 엑셀을 여는 데 시간이 조금 걸립니다."):
                 try:
-                    st.session_state["current_id"] = run_analysis(uploaded, info, str(base) if base else None)
+                    st.session_state["current_id"] = run_analysis(uploaded, info, str(base) if base else None, test)
                 except SystemExit as e:
                     st.error(str(e))
                 except Exception as e:

@@ -132,3 +132,15 @@ def test_req03_sorted_by_grade_and_only_flagged(sample):
     for ids in kf["근거 이벤트ID"]:
         assert set(ids.split(", ")) <= flagged
     assert "현장영상_01.mp4 외 5개" in kf["파일명"].tolist()
+
+
+# --- REQ-08 Test 모드와 검토 입력 필수 ----------------------------------------
+def test_req08_review_required_rules():
+    import obi_pipeline as p
+    empty = dict(테스트여부=0, 인터뷰여부="미확인", 보안서약서="미확인", 검토자="", 코멘트="")
+    assert p.review_missing(empty) == ["인터뷰 여부", "보안서약서 작성 여부", "검토자", "Comment 및 확인 결과"]
+    assert p.review_missing(dict(empty, 테스트여부=1)) == []                     # Test 는 요구 안 함
+    full = dict(empty, 인터뷰여부="예", 보안서약서="아니오", 검토자="김검토", 코멘트="이상 없음")
+    assert p.review_missing(full) == []
+    assert p.review_missing(dict(full, 코멘트="   ")) == ["Comment 및 확인 결과"]
+    assert p.review_missing({"인터뷰여부": "예"}) != []                           # 옛 이력(테스트여부 없음) = 정식

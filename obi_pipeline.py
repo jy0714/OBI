@@ -160,6 +160,24 @@ def events_of(tl, ids):
     return tl[tl["이벤트ID"].isin(ids)]
 
 
+def review_missing(rec):
+    """REQ-08 정식 이력의 검토 필수값 중 빠진 항목 이름 목록 (Test 이력은 항상 빈 목록).
+    rec: 이력 dict 또는 목록 행. [결정 필요 #5] 강제 시점은 검토 저장·리포트 생성 (분석 직후는 '입력 필요' 표시만)."""
+    get = rec.get if hasattr(rec, "get") else (lambda k, d=None: getattr(rec, k, d))
+    if int(get("테스트여부", 0) or 0):
+        return []
+    miss = []
+    if (get("인터뷰여부", "") or "미확인") == "미확인":
+        miss.append("인터뷰 여부")
+    if (get("보안서약서", "") or "미확인") == "미확인":
+        miss.append("보안서약서 작성 여부")
+    if not str(get("검토자", "") or "").strip():
+        miss.append("검토자")
+    if not str(get("코멘트", "") or "").strip():
+        miss.append("Comment 및 확인 결과")
+    return miss
+
+
 def board_summary(tl):
     """게시판 목록용 값 (REQ-06): (최고 등급, 확인 필요 건수). 저장할 때 같이 넣는다."""
     cands, _, _ = derive(tl)

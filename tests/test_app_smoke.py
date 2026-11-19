@@ -52,3 +52,22 @@ def test_history_page_renders(temp_db, sample):
     at = AppTest.from_file(APP, default_timeout=60).run()
     at.sidebar.radio[0].set_value("이력 조회").run()
     assert not at.exception, at.exception
+
+
+def test_req08_review_form_blocks_missing(temp_db, sample):
+    """정식 이력: 필수값 없이 저장 안 됨 / Test 이력: 경고 없음"""
+    import obi_pipeline as pipeline
+    aid = pipeline.save(sample["result"])
+    at = AppTest.from_file(APP, default_timeout=60)
+    at.session_state["current_id"] = aid
+    at.run()
+    assert any("입력 필요" in w.value for w in at.warning)
+    at.button(key="FormSubmitter:new_review-검토 내용 저장").click().run()
+    assert any("입력해야 저장" in e.value for e in at.error)
+    assert store.get_analysis(aid)["검토일시"] == ""
+
+    tid = pipeline.save(sample["result"], test=True)
+    at2 = AppTest.from_file(APP, default_timeout=60)
+    at2.session_state["current_id"] = tid
+    at2.run()
+    assert not any("입력 필요" in w.value for w in at2.warning)

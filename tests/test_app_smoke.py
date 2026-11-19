@@ -71,3 +71,20 @@ def test_req08_review_form_blocks_missing(temp_db, sample):
     at2.session_state["current_id"] = tid
     at2.run()
     assert not any("입력 필요" in w.value for w in at2.warning)
+
+
+def test_req09_board_to_detail_and_back(temp_db, sample):
+    """게시판 → 상세 → 게시판. (AppTest 는 표 행 클릭을 흉내 낼 수 없어 선택 결과 상태로 진입한다)"""
+    import obi_pipeline as pipeline
+    aid = pipeline.save(sample["result"])
+    at = AppTest.from_file(APP, default_timeout=60).run()
+    at.sidebar.radio[0].set_value("이력 조회").run()
+    assert not at.exception
+    assert not at.selectbox or all(s.label != "상세 보기" for s in at.selectbox)     # 선택 상자 없음
+    at.session_state["board_pick"] = aid
+    at.run()
+    assert not at.exception, at.exception
+    assert any(m.label == "최고 등급" for m in at.metric)                           # 상세가 열림
+    at.button(key="board_back").click().run()
+    assert "board_pick" not in at.session_state
+    assert not any(m.label == "최고 등급" for m in at.metric)                       # 게시판으로 돌아옴

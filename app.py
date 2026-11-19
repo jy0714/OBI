@@ -381,8 +381,10 @@ def render_detail(analysis_id, key):
                     store.delete_analysis(analysis_id)
                 else:
                     store.mark_deleted(analysis_id, st.session_state.get("user", ""))
-                if st.session_state.get("current_id") == analysis_id:
-                    st.session_state.pop("current_id")
+                for k in ("current_id", "board_pick"):
+                    if st.session_state.get(k) == analysis_id:
+                        st.session_state.pop(k)
+                st.session_state.pop("board_table", None)
                 st.rerun()
 
 
@@ -429,6 +431,15 @@ def page_new():
 
 def page_history():
     top_bar("이력 조회")
+    pick = st.session_state.get("board_pick")
+    if pick:                                   # 게시판에서 고른 이력의 상세 (REQ-09)
+        if st.button("← 게시판으로", key="board_back"):
+            st.session_state.pop("board_pick", None)
+            st.session_state.pop("board_table", None)   # 표 선택 해제
+            st.rerun()
+        render_detail(pick, key=f"hist_{pick}")
+        return
+
     df = store.list_analyses()
     if df.empty:
         st.info("아직 저장된 이력이 없습니다.")
@@ -447,19 +458,16 @@ def page_history():
         include_test = g3.toggle("Test 이력 포함", value=False)
     view = pipeline.board(df, q, comps, states, grades, d_from, d_to, include_test)
 
-    st.caption(f"{len(view)}건 · 최신순 · 저장 위치 `{store.DB_PATH}`")
-    st.dataframe(view, hide_index=True, width="stretch")
+    st.caption(f"{len(view)}건 · 최신순 · 행을 누르면 상세가 열립니다 · 저장 위치 `{store.DB_PATH}`")
+    event = st.dataframe(view, hide_index=True, width="stretch", on_select="rerun",
+                         selection_mode="single-row", key="board_table")
+    if event and event.selection.rows:
+        st.session_state["board_pick"] = int(view.iloc[event.selection.rows[0]]["이력#"])
+        st.rerun()
     picked_ids = view["이력#"].tolist()
     st.download_button("이력 엑셀 내보내기 (기존 양식 · Test 제외)",
                        data=to_excel_bytes({"이력관리": store.to_legacy_frame(df[df["id"].isin(picked_ids)])}),
                        file_name=f"OBI_이력관리_{date.today()}.xlsx")
-
-    st.divider()
-    options = {f"#{r.이력} {r.이름} ({r.회사} {r.부서}) · 퇴직 {r.퇴직일자}": r.이력
-               for r in view.rename(columns={"이력#": "이력"}).itertuples()}
-    if options:
-        pick = st.selectbox("상세 보기", list(options))
-        render_detail(options[pick], key=f"hist_{options[pick]}")
 
 
 with st.sidebar:

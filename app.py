@@ -102,7 +102,7 @@ def run_analysis(uploaded, info, base_date):
         with open(src, "wb") as f:
             f.write(uploaded.getbuffer())
         r = pipeline.analyze_file(src, out, info, base_date)
-    return store.save_analysis(r["info"], r["checks"], r["summary"], r["timeline"], r["criteria"])
+    return pipeline.save(r)
 
 
 # ---------------------------------------------------------------------------
@@ -348,9 +348,15 @@ def render_detail(analysis_id, key):
                                  "기준점검": crit, "통합타임라인": tl, "채널요약": a["채널요약"]}),
             file_name=f"OBI_{a['이름']}_{a['퇴직일자']}_#{a['id']}.xlsx", key=f"{key}_dl")
         with b2.popover("이 이력 삭제"):
-            st.caption("잘못 실행한 분석이나 테스트 이력을 지웁니다. 되돌릴 수 없습니다.")
+            if a["테스트여부"]:
+                st.caption("Test 이력은 실제로 지웁니다. 되돌릴 수 없습니다.")
+            else:
+                st.caption("정식 이력은 목록에서 숨기고 삭제자·일시를 기록합니다 (DB 에는 남음).")
             if st.button("삭제 확인", key=f"{key}_del", type="primary"):
-                store.delete_analysis(analysis_id)
+                if a["테스트여부"]:
+                    store.delete_analysis(analysis_id)
+                else:
+                    store.mark_deleted(analysis_id, st.session_state.get("user", ""))
                 if st.session_state.get("current_id") == analysis_id:
                     st.session_state.pop("current_id")
                 st.rerun()

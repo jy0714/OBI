@@ -160,6 +160,21 @@ def events_of(tl, ids):
     return tl[tl["이벤트ID"].isin(ids)]
 
 
+def board_summary(tl):
+    """게시판 목록용 값 (REQ-06): (최고 등급, 확인 필요 건수). 저장할 때 같이 넣는다."""
+    cands, _, _ = derive(tl)
+    need = int((tl["점검결과"].fillna("") == "확인 필요").sum()) if "점검결과" in tl else 0
+    return (cands["등급"].iloc[0] if len(cands) else ""), need
+
+
+def save(result, *, test=False, sources=None):
+    """analyze_file() 결과를 저장하고 이력 id 를 돌려준다 (앱·하네스 공통)."""
+    import obi_store as store
+    top, need = board_summary(result["timeline"])
+    return store.save_analysis(result["info"], result["checks"], result["summary"], result["timeline"],
+                               result["criteria"], test=test, top_grade=top, need_count=need, sources=sources)
+
+
 def derive(tl):
     """검토 후보(점수)와 한눈에 보기 요약. LLM 연동 시 obi_ai 쪽만 교체하면 된다."""
     cands = ai.mock_analyze(tl)

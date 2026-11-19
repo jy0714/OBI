@@ -101,7 +101,7 @@ def execute(xlsx, retire_date, base_date=None, account=None, info=None):
             excel = {name: frame(df) for name, df in pd.read_excel(out, sheet_name=None).items()}
 
             store.init_db()
-            aid = store.save_analysis(r["info"], r["checks"], r["summary"], r["timeline"], r["criteria"])
+            aid = pipeline.save(r)
             a = store.get_analysis(aid)
         finally:
             store.DB_PATH = old_db
@@ -119,7 +119,7 @@ def render(x):
     a, tl, crit, cands, excel = x["analysis"], x["tl"], x["crit"], x["cands"], x["excel"]
     lead, points, prompt = x["lead"], x["points"], x["prompt"]
     stored_info = {k: a[k] for k in ("회사", "이름", "직급", "부서", "퇴직일자", "기준일", "계정",
-                                     "원본파일명", "이벤트수", "검증상태")}
+                                     "원본파일명", "이벤트수", "검증상태", "테스트여부", "최고등급", "확인필요건수")}
     app = {
         "info": stored_info,
         "검증결과": _plain(a["검증결과"]),

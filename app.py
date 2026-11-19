@@ -474,7 +474,7 @@ def render_detail(analysis_id, key):
                     store.delete_analysis(analysis_id)
                 else:
                     store.mark_deleted(analysis_id, st.session_state.get("user", ""))
-                for k in ("current_id", "board_pick"):
+                for k in ("current_id",):
                     if st.session_state.get(k) == analysis_id:
                         st.session_state.pop(k)
                 st.session_state.pop("board_table", None)
@@ -550,15 +550,6 @@ def page_new():
 
 def page_history():
     top_bar("이력 조회")
-    pick = st.session_state.get("board_pick")
-    if pick:                                   # 게시판에서 고른 이력의 상세 (REQ-09)
-        if st.button("← 게시판으로", key="board_back"):
-            st.session_state.pop("board_pick", None)
-            st.session_state.pop("board_table", None)   # 표 선택 해제
-            st.rerun()
-        render_detail(pick, key=f"hist_{pick}")
-        return
-
     df = store.list_analyses()
     if df.empty:
         st.info("아직 저장된 이력이 없습니다.")
@@ -577,16 +568,22 @@ def page_history():
         include_test = g3.toggle("Test 이력 포함", value=False)
     view = pipeline.board(df, q, comps, states, grades, d_from, d_to, include_test)
 
-    st.caption(f"{len(view)}건 · 최신순 · 행을 누르면 상세가 열립니다 · 저장 위치 `{store.DB_PATH}`")
+    st.caption(f"{len(view)}건 · 최신순 · 행을 누르면 아래에 상세가 나옵니다 · 저장 위치 `{store.DB_PATH}`")
     event = st.dataframe(view, hide_index=True, width="stretch", on_select="rerun",
                          selection_mode="single-row", key="board_table")
-    if event and event.selection.rows:
-        st.session_state["board_pick"] = int(view.iloc[event.selection.rows[0]]["이력#"])
-        st.rerun()
     picked_ids = view["이력#"].tolist()
     st.download_button("이력 엑셀 내보내기 (기존 양식 · Test 제외)",
                        data=to_excel_bytes({"이력관리": store.to_legacy_frame(df[df["id"].isin(picked_ids)])}),
                        file_name=f"OBI_이력관리_{date.today()}.xlsx")
+
+    # 고른 행의 상세를 게시판 아래에 (REQ-09). 필터로 표가 줄어 선택 위치가 사라지면 상세를 닫는다
+    rows = event.selection.rows if event else []
+    if rows and rows[0] < len(view):
+        pick = int(view.iloc[rows[0]]["이력#"])
+        st.divider()
+        render_detail(pick, key=f"hist_{pick}")
+    else:
+        st.caption("게시판의 행을 누르면 이 아래에 분석 상세가 열립니다.")
 
 
 with st.sidebar:

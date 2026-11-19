@@ -74,22 +74,26 @@ def test_req08_review_form_blocks_missing(temp_db, sample):
     assert not any("입력 필요" in w.value for w in at2.warning)
 
 
-def test_req09_board_to_detail_and_back(temp_db, sample):
-    """게시판 → 상세 → 게시판. (AppTest 는 표 행 클릭을 흉내 낼 수 없어 선택 결과 상태로 진입한다)"""
+def test_req09_board_row_opens_detail_below(temp_db, sample):
+    """게시판 행 선택 → 게시판은 그대로 두고 아래에 상세. 선택 해제 → 상세 닫힘"""
     import obi_pipeline as pipeline
     aid = pipeline.save(sample["result"])
     at = AppTest.from_file(APP, default_timeout=60).run()
     at.sidebar.radio[0].set_value("이력 조회").run()
     assert not at.exception
-    assert not at.selectbox or all(s.label != "상세 보기" for s in at.selectbox)     # 선택 상자 없음
-    at.session_state["board_pick"] = aid
+    assert not any(m.label == "최고 등급" for m in at.metric)                       # 선택 전: 상세 없음
+    assert all(s.label != "상세 보기" for s in at.selectbox)                        # 선택 상자 없음
+
+    at.session_state["board_table"] = {"selection": {"rows": [0], "columns": [], "cells": []}}   # 행 클릭
     at.run()
     assert not at.exception, at.exception
-    assert any(m.label == "최고 등급" for m in at.metric)                           # 상세가 열림
-    at.button(key="board_back").click().run()
-    assert "board_pick" not in at.session_state
-    assert not any(m.label == "최고 등급" for m in at.metric)                       # 게시판으로 돌아옴
+    assert any(m.label == "최고 등급" for m in at.metric)                           # 상세가 아래에 열림
+    assert any("행을 누르면 아래에 상세" in c.value for c in at.caption)              # 게시판도 그대로 보임
+    assert not any(b.key == "board_back" for b in at.button)                       # 화면 전환·돌아가기 없음
 
+    at.session_state["board_table"] = {"selection": {"rows": [], "columns": [], "cells": []}}    # 선택 해제
+    at.run()
+    assert not any(m.label == "최고 등급" for m in at.metric)
 
 def test_req10_upload_prefills_and_user_edit_wins(temp_db, tmp_path):
     """업로드 즉시 이름·직급 자동 입력 → 직급을 고쳐 Test 로 실행 → 고친 값과 출처가 저장된다 (REQ-10·08)"""

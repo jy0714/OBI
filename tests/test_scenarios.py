@@ -240,3 +240,51 @@ def test_req07_report_without_ai(sample):
     import obi_report as rep
     s = rep.build_report(sample["analysis"], "u", now="x")["요약"]
     assert "AI 의견" not in s["항목"].tolist()
+
+
+# --- REQ-11 사내 동반 수신 ------------------------------------------------------
+def _mail(tl, subject):
+    return tl[tl["대상"].astype(str) == f"제목: {subject}"].iloc[0]
+
+
+def test_req11_vendor_with_internal_is_r2_reference(sample):
+    import obi_criteria as crit
+    tl, cands = sample["tl"], sample["cands"]
+    r = _mail(tl, "도면 검토 요청")                       # 타사 + 사내, 자료 키워드 + 150MB
+    assert r["점검결과"] == "참고"
+    assert crit.codes_of(r["점검사유"]) == ["R2"] and "colleague@doosan.com" in r["점검사유"]
+    assert not any(r["이벤트ID"] in ids.split(", ") for ids in cands["근거이벤트"])   # 후보에 안 올라감
+
+
+def test_req11_existing_inc1003_still_r2(sample):
+    import obi_criteria as crit
+    assert crit.codes_of(_mail(sample["tl"], "미팅 자료")["점검사유"]) == ["R2"]
+
+
+def test_req11_self_address_is_not_companion(sample):
+    import obi_criteria as crit
+    r = _mail(sample["tl"], "개인 보관")                   # 개인메일 + 본인 사내 주소만
+    assert "B2" in crit.codes_of(r["점검사유"]) and "R2" not in crit.codes_of(r["점검사유"])
+
+
+def test_req11_security_keyword_kept_but_context_low(sample):
+    import obi_criteria as crit
+    tl, cands = sample["tl"], sample["cands"]
+    r = _mail(tl, "견적 회신")                             # 대외비 + 사내 동반 (hq.doosan.com 하위 도메인)
+    assert r["점검결과"] == "확인 필요" and crit.codes_of(r["점검사유"]) == ["B1", "R2"]
+    c = _cand_of(cands, r["이벤트ID"])
+    assert c.판단["행위 맥락"] == "낮음" and "사내 동반" in c.근거["행위 맥락"]
+
+
+def test_req11_companion_rules_unit():
+    import obi_criteria as crit
+    me = "kildong.hong@doosan.com"
+    assert crit.internal_companions(["a@vendor.com", "b@doosan.com"], me) == ["b@doosan.com"]
+    assert crit.internal_companions(["a@gmail.com", me], me) == []                      # 본인만 → 동반 아님
+    assert crit.internal_companions(["b@doosan.com"], me) == []                         # 외부 없음 → 사내 메일
+    assert crit.internal_companions(["a@vendor.com", "x@sub.doosan.com"], me) == ["x@sub.doosan.com"]
+    assert crit.internal_companions(["a@vendor.com", "x@evildoosan.com"], me) == []     # 비슷한 도메인 아님
+
+
+def test_req11_prompt_mentions_companion(sample):
+    assert "사내 동반" in sample["prompt"] and "판단 기준" in sample["prompt"]

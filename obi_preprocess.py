@@ -370,7 +370,9 @@ def conv_dlp(df, sheet, channel):
             rcpt = list(dict.fromkeys(g["RECIPIENTS or URL"].dropna().astype(str).str.strip().str.lower()))
             doms = sorted({domain_of(x) for x in rcpt})
             external = [d for d in doms if not matches_domain(d, INTERNAL_EMAIL_DOMAINS)]
+            sender = g["SENDER"].dropna().astype(str).str.strip().str.lower()
             out.append(ev(**base, 행위="외부 메일 발송" if external else "사내 메일 발송", 수신자=", ".join(rcpt),
+                          _발신자=sender.iloc[0] if len(sender) else "",   # 점검용 (REQ-11 본인 주소 판단), 출력 안 함
                           대상=f"제목: {g['EMAIL SUBJECT'].iloc[0]}",
                           개인메일="Y" if any(matches_domain(d, PERSONAL_MAIL_DOMAINS) for d in doms) else "",
                           상세=f"수신 {len(rcpt)}명: {', '.join(rcpt)} | 첨부 {len(files)}개: {flist}"

@@ -23,7 +23,8 @@ SCENARIO_NOTES = {
     "usb": "USB 쓰기/삭제(B5)·자료 키워드(B3 도면)·차단(R1)·DLP USB 와 중복기록",
     "print": "보안 키워드+50매 이상(B1·B6)·반복 출력(B7)·개인 문서(R4)·모호한 파일명(B9)·PC 시간 누락→서버 시간",
     "dlp_email": "개인메일 첨부(B2·B3)·같은 메일 규칙별 인시던트 병합·사내 동반(R2)·공공기관(R3)·차단(R1)"
-                 "·첨부 없는 개인메일(REQ-05)",
+                 "·첨부 없는 개인메일(REQ-05)·타사+사내 동반(R2)·개인메일+본인 주소만(B2)·보안 키워드+사내 동반"
+                 "(B1 유지·행위 맥락 낮음, 하위 도메인 hq.doosan.com)(REQ-11)",
     "dlp_web": "개인 클라우드 업로드(B4·B3)·승인 서비스(R6)·개인메일 사이트 업로드(REQ-05)",
     "dlp_usb": "USB 반출(B5·B3) — USB로그와 120초 이내 → 중복기록",
     "size": "REQ-01 B10: 웹 접속 120MB(단일), 업로드 정확히 100MB(경계 포함), USB 99.9MB(경계 미만), "
@@ -115,6 +116,21 @@ def build(path):
         # 차단 → R1
         ["INC-1005", "2026-07-10 11:00:00", ACCOUNT, "개인 백업", f"{ACCOUNT}@doosan.com", "x@gmail.com",
          "고객목록.xlsx", 90_000, "개인정보", "Blocked", None, "Outlook"],
+        # REQ-11 타사 + 사내 동반 → R2 참고 (자료 키워드·대용량이어도 B3·B10 안 붙음)
+        ["INC-1007", "2026-08-20 10:00:00", ACCOUNT, "도면 검토 요청", f"{ACCOUNT}@doosan.com", "partner@vendor.co.kr",
+         "도면_검토요청.pdf", 150 * MB, "외부 발송", "Allowed", None, "Outlook"],
+        ["INC-1007", "2026-08-20 10:00:00", ACCOUNT, "도면 검토 요청", f"{ACCOUNT}@doosan.com", "colleague@doosan.com",
+         "도면_검토요청.pdf", 150 * MB, "외부 발송", "Allowed", None, "Outlook"],
+        # REQ-11 개인메일 + 발신자 본인 사내 주소만 → 동반 아님, B2
+        ["INC-1008", "2026-08-28 20:00:00", ACCOUNT, "개인 보관", f"{ACCOUNT}@doosan.com", "me@gmail.com",
+         "개인자료_정리.xlsx", 30_000, "개인정보", "Allowed", None, "Outlook"],
+        ["INC-1008", "2026-08-28 20:00:00", ACCOUNT, "개인 보관", f"{ACCOUNT}@doosan.com", f"{ACCOUNT}@doosan.com",
+         "개인자료_정리.xlsx", 30_000, "개인정보", "Allowed", None, "Outlook"],
+        # REQ-11 보안 키워드 + 사내 동반 → B1 확인 필요 유지 + R2, 사건의 행위 맥락은 낮음
+        ["INC-1009", "2026-08-22 11:00:00", ACCOUNT, "견적 회신", f"{ACCOUNT}@doosan.com", "buyer@client.co.kr",
+         "대외비_견적.pdf", 80_000, "외부 발송", "Allowed", None, "Outlook"],
+        ["INC-1009", "2026-08-22 11:00:00", ACCOUNT, "견적 회신", f"{ACCOUNT}@doosan.com", "team.lead@hq.doosan.com",
+         "대외비_견적.pdf", 80_000, "외부 발송", "Allowed", None, "Outlook"],
         # 첨부 없는 개인메일 → 개인메일 발송 영역 아래쪽
         ["INC-1006", "2026-08-30 09:00:00", ACCOUNT, "안부", f"{ACCOUNT}@doosan.com", "me2@daum.net",
          None, None, "외부 발송", "Allowed", None, "Outlook"],

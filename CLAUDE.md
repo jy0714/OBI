@@ -91,6 +91,7 @@ Defined entirely in `obi_criteria.py`:
 
 - **B1–B10** — `확인 필요` (must review): security-keyword files, personal-mail attachments, material-keyword exfiltration, personal cloud, USB, large/repeat printing, ambiguous filenames, large transfers (B10). Codes can be two digits — always parse with `obi_criteria.codes_of()`, never substring checks.
 - **R1–R6** — `참고 관찰` (reference, not flagged): blocked by DLP, co-internal recipients, public-sector domains, personal documents, recruitment sites, approved services.
+  R2 (REQ-11) = external recipient (personal *or* vendor) + an `INTERNAL_DOMAINS` address (sender's own address excluded, `COMPANION_EXCLUDE_SENDER`). Such mail gets no B2/B3/B9/B10; B1 stays (`COMPANION_DOWNGRADE_B1`). A case lowers `행위 맥락` only when *all* its events are R2 mails.
 - **A1–A7** — reserved for LLM (currently shown as "LLM 연동 후 판단" in output).
 
 ### Operator-configurable values

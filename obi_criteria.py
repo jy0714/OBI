@@ -44,6 +44,11 @@ SIZE_DAY_MIN_MB = 500       # 하루 합계 용량
 SIZE_DAY_EVENT_MIN_MB = 1   # 하루 합계 초과일에 B10 을 붙일 개별 행위 최소 용량 (작은 웹 접속까지 표시하지 않도록)
 SIZE_CHANNELS = ("이메일", "웹 업로드", "USB", "USB(DLP)", "웹")   # 웹은 허용된 접속의 SentBytes
 MB = 1024 * 1024
+# 사내 동반 수신 (REQ-11)
+# [결정 필요 #7] 발신자 본인의 사내 주소만 수신자에 있으면 동반으로 보지 않는다 (False 면 본인 주소도 동반)
+COMPANION_EXCLUDE_SENDER = True
+# [결정 필요 #8] 보안등급 키워드(B1) 메일도 사내 동반이면 참고로 내릴지 (False = '확인 필요' 유지, 행위 맥락만 낮음)
+COMPANION_DOWNGRADE_B1 = False
 
 # ===========================================================================
 # 점검 항목 정의 (화면·보고서에 그대로 표시)
@@ -63,7 +68,8 @@ CODE_CHECKS = [
 ]
 REFERENCE_CHECKS = [
     ("R1", "차단 완료", "보안 솔루션이 차단한 기록 (차단이 정상 동작한 것으로 보고 우선 검토 제외)"),
-    ("R2", "사내 동반 수신", "개인메일 수신자가 있으나 사내 도메인이 함께 수신 (업무용 추정)"),
+    ("R2", "사내 동반 수신", "외부 수신자(개인메일·타사)가 있으나 사내 도메인 주소가 함께 수신 (업무용 추정, "
+                         "B2·B3·B9·B10 제외 · B1 은 유지)"),
     ("R3", "공공·학술 기관", ".go.kr·.ac.kr·.org 수신 또는 업로드 (업무용 추정)"),
     ("R4", "개인 문서", "재직증명서·원천징수영수증 등 개인 문서 (공식 문서로 집계하지 않음)"),
     ("R5", "채용 사이트", "채용 사이트 이용"),
@@ -119,6 +125,18 @@ def codes_of(reasons):
 def _is_ambiguous(name):
     st = _stem(name)
     return bool(st) and any(re.search(p, st) for p in AMBIGUOUS_NAME_PATTERNS)
+
+
+def internal_companions(rcpts, sender=""):
+    """REQ-11 외부 수신자가 있을 때 함께 받은 사내 주소 목록 (외부가 없으면 빈 목록).
+    사내 판단은 INTERNAL_DOMAINS 한 곳 (하위 도메인 포함). 발신자 본인 주소는 COMPANION_EXCLUDE_SENDER 에 따름."""
+    rcpts = [str(x).strip().lower() for x in rcpts if str(x).strip()]
+    external = [x for x in rcpts if _domain(x) and not _match_domain(_domain(x), INTERNAL_DOMAINS)]
+    if not external:
+        return []
+    me = str(sender or "").strip().lower()
+    return [x for x in rcpts if _match_domain(_domain(x), INTERNAL_DOMAINS)
+            and not (COMPANION_EXCLUDE_SENDER and me and x == me)]
 
 
 def fmt_mb(n_bytes):
@@ -180,18 +198,20 @@ def apply_criteria(tl):
         if blocked:
             hits[i].append(("R1", ""))
 
-        # B1 보안등급 (무조건)
-        sec = _has_kw(names, SECURITY_KEYWORDS)
-        if sec:
-            hits[i].append(("B1", ", ".join(sec)))
-
-        # 이메일 수신자 분류
-        internal_co = any(_match_domain(d, INTERNAL_DOMAINS) for d in doms)
+        # 이메일 수신자 분류 — 사내 동반(REQ-11): 외부 수신자 + 사내 주소(본인 제외) 함께 수신
         personal_rcpt = [d for d in doms if _match_domain(d, PERSONAL_MAIL_DOMAINS)]
         external = [d for d in doms if d and not _match_domain(d, INTERNAL_DOMAINS)]
+        companions = internal_companions(rcpts, r.get("_발신자")) if ch == "이메일" else []
+        co = bool(companions)        # 사내 동반 메일: B2·B3·B9·B10 을 붙이지 않는다
+
+        # B1 보안등급 (무조건 — 사내 동반이어도 유지, COMPANION_DOWNGRADE_B1 로만 끔)
+        sec = _has_kw(names, SECURITY_KEYWORDS)
+        if sec and not (co and COMPANION_DOWNGRADE_B1):
+            hits[i].append(("B1", ", ".join(sec)))
+
         if ch == "이메일":
-            if personal_rcpt and internal_co:
-                hits[i].append(("R2", ", ".join(personal_rcpt)))
+            if co:
+                hits[i].append(("R2", ", ".join(companions)))
             elif personal_rcpt and files and not personal_doc and not blocked:
                 hits[i].append(("B2", ", ".join(x for x in rcpts if _domain(x) in personal_rcpt)))
             if external and all(any(d.endswith(s) for s in PUBLIC_DOMAIN_SUFFIXES) for d in external):
@@ -199,10 +219,10 @@ def apply_criteria(tl):
             elif not external:
                 hits[i].append(("R6", "사내 수신만"))
 
-        # B3 자료 키워드 반출·출력 (사내 전용 메일·개인 문서·차단은 제외)
+        # B3 자료 키워드 반출·출력 (사내 전용·사내 동반 메일·개인 문서·차단은 제외)
         mat = _has_kw(names, MATERIAL_KEYWORDS)
         if mat and ch in outbound and not personal_doc and not blocked:
-            if ch != "이메일" or (external and not internal_co):
+            if ch != "이메일" or (external and not co):
                 hits[i].append(("B3", ", ".join(mat)))
 
         # 웹 / 웹 업로드
@@ -232,14 +252,14 @@ def apply_criteria(tl):
             if pd.notna(r["시간"]) and r["시간"].date() in surge_days:
                 hits[i].append(("B8", f"{r['시간'].date()} {day_cnt[r['시간'].date()]}건"))
 
-        # B9 파일명 모호
-        if ch in outbound and not blocked:
+        # B9 파일명 모호 (사내 동반 메일 제외)
+        if ch in outbound and not blocked and not co:
             amb = [f for f in (files or [r.get("대상")]) if _is_ambiguous(f)]
             if amb:
                 hits[i].append(("B9", ", ".join(map(str, amb))))
 
-        # B10 대용량 전송 (차단 건은 transfer_bytes 에서 0 → R1 만 남음)
-        b = sent[i]
+        # B10 대용량 전송 (차단 건은 transfer_bytes 에서 0 → R1 만 남음, 사내 동반 메일 제외)
+        b = 0 if co else sent[i]
         day = r["시간"].date() if pd.notna(r["시간"]) else None
         if b >= SIZE_SINGLE_MIN_MB * MB:
             hits[i].append(("B10", fmt_mb(b)))

@@ -119,9 +119,14 @@ def mock_analyze(tl):
         else:
             sens, sens_why = "낮음", "파일명만으로는 자료 성격을 알기 어려움"
 
-        if codes & {"B2", "B4"}:
+        # REQ-11: 사건의 모든 행위가 사내 동반(R2) 메일일 때만 낮춘다 (다른 행위와 섞이면 낮추지 않음)
+        all_companion = all(ch == "이메일" and "R2" in crit.codes_of(rs)
+                            for ch, rs in zip(g["채널"], g["점검사유"].fillna("")))
+        if all_companion:
+            ctx, ctx_why = "낮음", "사내 동반 수신 (사내 주소가 함께 받은 메일)"
+        elif codes & {"B2", "B4"}:
             ctx, ctx_why = "높음", "개인메일·개인 클라우드 등 업무 경로가 아닌 곳으로 이동"
-        elif codes & {"R2", "R3", "R6"}:
+        elif codes & {"R3", "R6"}:
             ctx, ctx_why = "낮음", "사내·거래처·공공기관 등 업무 경로"
         else:
             ctx, ctx_why = "중간", "업무 범위인지 부서 확인이 필요"
@@ -275,6 +280,7 @@ def build_llm_prompt(info, crit_df, cands, tl):
             f"{getattr(r,'채널','')} {getattr(r,'행위','')} | "
             f"대상: {str(getattr(r,'대상',''))[:60]} | "
             f"사유: {getattr(r,'점검사유','')}"
+            + (" | 사내 동반" if "R2" in crit.codes_of(getattr(r, '점검사유', '')) else "")
             for r in need.head(30).itertuples()
         ]
         if len(need) > 30:
@@ -300,6 +306,9 @@ DLP·웹 필터·USB·출력 모니터링 데이터를 분석하여 내부 자�
 
 ═══ 확인 필요 이벤트 목록 (최대 30건) ═══
 {event_text}
+
+═══ 판단 기준 ═══
+- 외부로 나간 메일이라도 사내 도메인({', '.join(crit.INTERNAL_DOMAINS)}) 주소가 함께 수신한 '사내 동반' 메일은 업무용으로 보고 리스크를 낮게 판단합니다. 단, 보안등급 키워드 자료는 그대로 확인합니다.
 
 ═══ 분석 의견 작성 요청 ═══
 위 데이터를 종합하여 아래 형식으로 작성하세요.

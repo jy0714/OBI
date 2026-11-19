@@ -39,7 +39,8 @@ def test_detail_renders_sample(temp_db, sample):
     shown = " ".join(str(m.value) for m in at.markdown) + " ".join(str(c.value) for c in at.caption)
     assert "점수" not in shown
     assert any("주요 검토 파일" in m.value for m in at.markdown)          # REQ-03
-    assert metrics["개인메일 발송"] == "5건 (첨부 4건)"                     # REQ-05
+    pm = sample["personal_mail"]
+    assert metrics["개인메일 발송"] == f"{len(pm)}건 (첨부 {int((pm['첨부 수'] > 0).sum())}건)"   # REQ-05
     assert any("개인메일 발송" in m.value for m in at.markdown)
     labels = [t.label for t in at.tabs]
     for name in ("기준 점검", "통합타임라인", "채널·추이", "AI 분석"):

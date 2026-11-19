@@ -45,7 +45,7 @@ SAMPLE_INFO = dict(회사="DBI", 이름="테스트", 직급="선임", 부서="�
 
 # LLM 보고서가 지켜야 할 형식 (build_llm_prompt 의 '분석 의견 작성 요청' 과 일치)
 REPORT_SECTIONS = ["1. 종합 위험 평가", "2. 핵심 우려 사항", "3. 추가 확인 필요 사항", "4. 최종 위험 수준"]
-REPORT_LEVELS = ("높음", "중간", "낮음")
+REPORT_LEVELS = ("Critical", "Medium", "Low")
 
 
 # ---------------------------------------------------------------------------
@@ -197,7 +197,7 @@ def check_report_format(text):
     problems = [f"섹션 누락: {s}" for s in REPORT_SECTIONS if s not in (text or "")]
     tail = (text or "").split(REPORT_SECTIONS[-1], 1)[-1]
     if REPORT_SECTIONS[-1] in (text or "") and not any(lv in tail for lv in REPORT_LEVELS):
-        problems.append("최종 위험 수준에 높음/중간/낮음 중 하나가 없음")
+        problems.append("최종 위험 수준에 Critical/Medium/Low 중 하나가 없음")
     return problems
 
 

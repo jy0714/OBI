@@ -73,11 +73,11 @@ tests/            — harness.py (golden runner), fixtures/sample_ddi.py, golden
 | 반출 경로 | Code | 20 |
 | 시점·패턴 | Code | 15 |
 
-Each factor is rated 높음/중간/낮음 (1.0 / 0.5 / 0.0). Band thresholds: ≥70 높음, ≥40 중간, <40 낮음.
+Each factor is rated 높음/중간/낮음 (1.0 / 0.5 / 0.0), summed with `floor(x+0.5)`. **Users never see the number** (REQ-04): it is mapped to a grade by `grade_of()` — ≥70 Critical, ≥40 Medium, else Low (`GRADE_*_MIN`), and B2 (personal-mail attachment) lifts a case to at least Medium, to Critical with B1/B3/B10 (`PERSONAL_MAIL_GRADE_BOOST`). `위험점수` stays only as an internal sort key; never put it in UI, exports, insights or the LLM prompt.
 
 ### LLM integration point
 
-`obi_ai.mock_analyze()` is the only function to replace when wiring in a real LLM. It must return a DataFrame with columns: `후보ID`, `위험점수`, `유형`, `기간`, `채널`, `건수`, `설명`, `근거이벤트`, `점검항목`, `판단` (dict of factor→level), `근거` (dict of factor→reason string), `구분`.
+`obi_ai.mock_analyze()` is the only function to replace when wiring in a real LLM. It must return a DataFrame with columns: `후보ID`, `등급`, `위험점수`, `유형`, `기간`, `채널`, `건수`, `설명`, `근거이벤트`, `점검항목`, `판단` (dict of factor→level), `근거` (dict of factor→reason string), `구분`.
 
 `mock_insights()` (the 한눈에 보기 summary) should also be replaced; it produces `(lead_text: str, points: list[str])`.
 
@@ -85,7 +85,7 @@ Each factor is rated 높음/중간/낮음 (1.0 / 0.5 / 0.0). Band thresholds: �
 
 Defined entirely in `obi_criteria.py`:
 
-- **B1–B9** — `확인 필요` (must review): security-keyword files, personal-mail attachments, material-keyword exfiltration, personal cloud, USB, large/repeat printing, ambiguous filenames.
+- **B1–B10** — `확인 필요` (must review): security-keyword files, personal-mail attachments, material-keyword exfiltration, personal cloud, USB, large/repeat printing, ambiguous filenames, large transfers (B10). Codes can be two digits — always parse with `obi_criteria.codes_of()`, never substring checks.
 - **R1–R6** — `참고 관찰` (reference, not flagged): blocked by DLP, co-internal recipients, public-sector domains, personal documents, recruitment sites, approved services.
 - **A1–A7** — reserved for LLM (currently shown as "LLM 연동 후 판단" in output).
 

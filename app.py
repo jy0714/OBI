@@ -20,7 +20,8 @@ st.set_page_config(page_title="OBI · Offboarding Inspector", page_icon="🛡️
 store.init_db()
 
 NAVY, DEEP, BAR = "#1E2761", "#002060", "#1B3A5C"
-BAND_COLOR = {"높음": ("#FBE9E7", "#A8322D"), "중간": ("#FDF1DF", "#9A5B0C"), "낮음": ("#E9EEF7", "#1E2761")}
+BAND_COLOR = {"Critical": ("#FBE9E7", "#A8322D"), "Medium": ("#FDF1DF", "#9A5B0C"), "Low": ("#E9EEF7", "#1E2761")}
+GRADE_ICON = {"Critical": "🔴", "Medium": "🟠", "Low": "🟡"}
 
 st.markdown("""
 <style>
@@ -61,7 +62,7 @@ def top_bar(tag):
 
 
 def chip(text, band):
-    bg, fg = BAND_COLOR.get(band, BAND_COLOR["낮음"])
+    bg, fg = BAND_COLOR.get(band, BAND_COLOR["Low"])
     return f'<span class="obi-chip" style="background:{bg};color:{fg}">{text}</span>'
 
 
@@ -134,25 +135,17 @@ def _ai_cfg():
 # ---------------------------------------------------------------------------
 # 분석 상세 (새 분석 직후와 이력 조회에서 공통 사용)
 # ---------------------------------------------------------------------------
-def risk_band(score):
-    return ("높음", "🔴") if score >= 70 else (("중간", "🟠") if score >= 40 else ("낮음", "🟡"))
-
-
 def candidate_card(r, tl, key):
-    band, icon = risk_band(r.위험점수)
     with st.container(border=True):
-        h1, h2 = st.columns([6, 1])
-        h1.markdown(chip(f"위험 {band}", band) +
+        st.markdown(chip(f"{GRADE_ICON.get(r.등급, '')} {r.등급}", r.등급) +
                     f'<span class="obi-card-title">{r.유형}</span>'
                     f'<div class="obi-card-meta">{r.기간} · {r.건수}건 · 근거 {r.근거이벤트}</div>',
                     unsafe_allow_html=True)
-        h2.metric("점수", r.위험점수)
         st.write(r.설명)
         with st.expander("판단 근거와 원본 로그"):
             st.dataframe(pd.DataFrame(
-                [{"판단 요소": k, "주체": ai.WEIGHTS[k][0], "판단": v,
-                  "배점": f"{round(ai.WEIGHTS[k][1] * ai.LEVELS[v])} / {ai.WEIGHTS[k][1]}",
-                  "근거": r.근거[k]} for k, v in r.판단.items()]),
+                [{"판단 요소": k, "주체": ai.WEIGHTS[k][0], "판단": v, "근거": r.근거[k]}
+                 for k, v in r.판단.items()]),
                 hide_index=True, width="stretch")
             ids = [x.strip() for x in r.근거이벤트.split(",")]
             st.dataframe(tl[tl["이벤트ID"].isin(ids)].reindex(
@@ -170,20 +163,19 @@ def render_detail(analysis_id, key):
     need = col_is(tl, "점검결과", "확인 필요")
     ref = col_is(tl, "점검결과", "참고")
     cands, lead_text, points = pipeline.derive(tl)
-    top_score = int(cands["위험점수"].max()) if not cands.empty else 0
+    top_grade = cands["등급"].iloc[0] if not cands.empty else "-"
 
     # ---------------- 헤더 ----------------
-    band, icon = risk_band(top_score)
     h1, h2 = st.columns([4, 1])
     h1.markdown(f"<div class='obi-card-title' style='font-size:20px'>{a['이름']} · {a['회사']} {a['부서']}"
                 f" · 퇴직일 {a['퇴직일자']}</div>"
                 f"<div class='obi-card-meta'>이력 #{a['id']} · 분석 {a['분석일시']} · 로그 기준일 {a['기준일']}"
                 f" · 계정 {a['계정']} · 로그 검증 {a['검증상태']}</div>", unsafe_allow_html=True)
-    h2.markdown(chip(f"{icon} 최고 위험 {band}", band), unsafe_allow_html=True)
+    h2.markdown(chip(f"{GRADE_ICON.get(top_grade, '')} 최고 등급 {top_grade}", top_grade), unsafe_allow_html=True)
 
     m = st.columns(5)
     m[0].metric("검토 후보", f"{len(cands)}건")
-    m[1].metric("최고 점수", top_score)
+    m[1].metric("최고 등급", top_grade)
     m[2].metric("확인 필요 행위", f"{len(need)}건")
     m[3].metric("참고 관찰", f"{len(ref)}건")
     m[4].metric("전체 이벤트", f"{a['이벤트수']}건")
@@ -206,17 +198,16 @@ def render_detail(analysis_id, key):
         if cands.empty:
             st.info("확인 필요 행위가 없어 후보가 만들어지지 않았습니다.")
         else:
-            bands = [("높음", cands[cands["위험점수"] >= 70]),
-                     ("중간", cands[(cands["위험점수"] >= 40) & (cands["위험점수"] < 70)]),
-                     ("낮음", cands[cands["위험점수"] < 40])]
-            tabs = st.tabs([f"{icon} {name} {len(df)}" for (name, df), icon in zip(bands, ["🔴", "🟠", "🟡"])])
+            bands = [(g, cands[cands["등급"] == g]) for g in ai.GRADES]
+            tabs = st.tabs([f"{GRADE_ICON[name]} {name} {len(df)}" for name, df in bands])
             for tab, (name, df) in zip(tabs, bands):
                 with tab:
                     if df.empty:
                         st.caption("해당 없음")
                     for r in df.itertuples():
                         candidate_card(r, tl, key)
-            st.caption("위험 점수: AI 판단(자료 민감도·행위 맥락·흐름 연결) 65점 + 코드 확인(반출 경로·시점) 35점")
+            st.caption("등급: AI 판단(자료 민감도·행위 맥락·흐름 연결)과 코드 확인(반출 경로·시점·패턴)을 종합해 "
+                       "Critical / Medium / Low 로 표시합니다.")
 
     # ---------------- 기준 점검 ----------------
     with t_main:

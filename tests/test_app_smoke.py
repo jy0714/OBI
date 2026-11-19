@@ -33,6 +33,11 @@ def test_detail_renders_sample(temp_db, sample):
     metrics = {m.label: m.value for m in at.metric}
     assert metrics["검토 후보"] == f"{len(sample['cands'])}건"
     assert metrics["전체 이벤트"] == f"{len(sample['tl'])}건"
+    # REQ-04: 숫자 점수 대신 등급
+    assert metrics["최고 등급"] == sample["cands"]["등급"].iloc[0]
+    assert not any("점수" in label for label in metrics)
+    shown = " ".join(str(m.value) for m in at.markdown) + " ".join(str(c.value) for c in at.caption)
+    assert "점수" not in shown
     labels = [t.label for t in at.tabs]
     for name in ("기준 점검", "통합타임라인", "채널·추이", "AI 분석"):
         assert name in labels

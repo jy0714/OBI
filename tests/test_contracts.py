@@ -10,7 +10,7 @@ import harness
 import obi_ai as ai
 import obi_criteria as crit
 
-CAND_COLUMNS = ["후보ID", "위험점수", "유형", "기간", "채널", "건수", "설명", "근거이벤트", "점검항목", "판단", "근거", "구분"]
+CAND_COLUMNS = ["후보ID", "등급", "위험점수", "유형", "기간", "채널", "건수", "설명", "근거이벤트", "점검항목", "판단", "근거", "구분"]
 EXCEL_SHEETS = ["검증결과", "기준점검", "통합타임라인", "채널요약", "일별건수", "시트상태", "분석조건"]
 TIMELINE_COLUMNS = ["이벤트ID", "시간", "점검결과", "점검사유", "기간", "채널", "행위", "대상", "상세", "파일목록", "파일유형",
                     "용량_bytes", "페이지수", "첨부수", "차단여부", "업무시간외", "최초등장", "개인메일", "승인서비스",
@@ -63,7 +63,8 @@ def test_criteria_table(sample):
 def test_candidate_contract(sample):
     cands, tl = sample["cands"], sample["tl"]
     assert list(cands.columns) == CAND_COLUMNS
-    assert cands["위험점수"].is_monotonic_decreasing
+    order = list(zip(cands["등급"].map(ai.grade_rank), -cands["위험점수"]))
+    assert order == sorted(order)                              # 등급 → 내부 점수 순
     for r in cands.itertuples():
         assert set(r.판단) == set(ai.WEIGHTS) and set(r.근거) == set(ai.WEIGHTS)
         assert set(r.판단.values()) <= set(ai.LEVELS)
@@ -71,6 +72,23 @@ def test_candidate_contract(sample):
         assert 0 <= r.위험점수 <= sum(w for _, w, _ in ai.WEIGHTS.values())
         assert r.건수 == len(r.근거이벤트.split(", "))
         assert r.구분 in ("우선 검토", "추가 확인")
+        codes = [c.strip() for c in r.점검항목.split(",") if c.strip()]
+        assert r.등급 == ai.grade_of(r.위험점수, codes)
+
+
+def test_grade_rules():
+    assert [ai.grade_of(s) for s in (70, 69, 40, 39)] == ["Critical", "Medium", "Medium", "Low"]
+    assert ai.grade_of(10, ["B2"]) == "Medium"                  # 개인메일 첨부 → 최소 Medium
+    assert ai.grade_of(10, ["B2", "B10"]) == "Critical"         # + 대용량 → Critical
+    assert ai.grade_of(90, ["B2"]) == "Critical"                # 올리기만 하고 내리지 않음
+    assert ai.score_candidate({"자료 민감도": "중간", "흐름 연결": "중간"}) == 20   # 12.5+7.5
+    assert ai.score_candidate({"자료 민감도": "중간"}) == 13                        # 12.5 → 13 (floor(x+.5))
+
+
+def test_no_numeric_score_shown(sample):
+    """REQ-04: 사용자에게 보이는 문장·프롬프트에 숫자 점수가 없다"""
+    for text in [sample["lead"], *sample["points"], sample["prompt"]]:
+        assert "점수" not in text, text
 
 
 def test_every_flagged_event_in_exactly_one_candidate(sample):
@@ -91,10 +109,10 @@ def test_prompt_requests_report_sections(sample):
 
 
 def test_report_format_checker():
-    ok = "**1. 종합 위험 평가**\n..\n**2. 핵심 우려 사항**\n..\n**3. 추가 확인 필요 사항**\n- a\n**4. 최종 위험 수준**\n높음: 근거"
+    ok = "**1. 종합 위험 평가**\n..\n**2. 핵심 우려 사항**\n..\n**3. 추가 확인 필요 사항**\n- a\n**4. 최종 위험 수준**\nCritical: 근거"
     assert harness.check_report_format(ok) == []
     assert "섹션 누락: 2. 핵심 우려 사항" in harness.check_report_format(ok.replace("2. 핵심 우려 사항", ""))
-    assert harness.check_report_format(ok.replace("높음", "모름"))
+    assert harness.check_report_format(ok.replace("Critical", "모름"))
 
 
 # --- 빈 입력 ---------------------------------------------------------------

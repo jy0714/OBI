@@ -8,6 +8,7 @@ LLM 연동 전에 결과 화면과 점수 구조를 미리 확인하기 위한 �
 점수 계산(score_candidate)과 결과 형식은 그대로 쓴다.
 """
 import json
+import math
 import re
 
 import pandas as pd
@@ -28,10 +29,33 @@ LEVELS = {"높음": 1.0, "중간": 0.5, "낮음": 0.0}
 PRIORITY_MAX = 10          # 우선 검토 목록 상한
 OUTBOUND = {"이메일", "웹 업로드", "USB", "USB(DLP)", "출력"}
 
+# 등급 (REQ-04). 사용자에게는 등급만 보이고, 위험점수는 내부 정렬용으로만 남긴다 ([결정 필요] #2).
+GRADES = ("Critical", "Medium", "Low")      # 높은 순
+GRADE_CRITICAL_MIN = 70
+GRADE_MEDIUM_MIN = 40
+# [결정 필요] #3 개인메일 첨부 발송(B2)의 등급 반영 (REQ-05). False 면 점수 기준 등급만 쓴다.
+PERSONAL_MAIL_GRADE_BOOST = True
+PERSONAL_MAIL_CRITICAL_WITH = {"B1", "B3", "B10"}   # B2 와 함께 있으면 Critical
+
 
 def score_candidate(levels):
-    """요소별 높음/중간/낮음 → 고정 배점으로 환산 (LLM은 점수를 직접 매기지 않는다)"""
-    return round(sum(WEIGHTS[k][1] * LEVELS.get(v, 0) for k, v in levels.items()))
+    """요소별 높음/중간/낮음 → 고정 배점으로 환산 (LLM은 점수를 직접 매기지 않는다).
+    반올림은 floor(x + 0.5) — round() 의 은행가 반올림(32.5→32, 37.5→38)을 피한다."""
+    return math.floor(sum(WEIGHTS[k][1] * LEVELS.get(v, 0) for k, v in levels.items()) + 0.5)
+
+
+def grade_of(score, codes=()):
+    """내부 점수(+점검 코드) → Critical / Medium / Low"""
+    g = "Critical" if score >= GRADE_CRITICAL_MIN else "Medium" if score >= GRADE_MEDIUM_MIN else "Low"
+    if PERSONAL_MAIL_GRADE_BOOST and "B2" in codes:
+        floor_g = "Critical" if set(codes) & PERSONAL_MAIL_CRITICAL_WITH else "Medium"
+        g = min(g, floor_g, key=GRADES.index)
+    return g
+
+
+def grade_rank(g):
+    """정렬용: Critical=0, Medium=1, Low=2, 없음=3"""
+    return GRADES.index(g) if g in GRADES else len(GRADES)
 
 
 def _cluster(tl):
@@ -126,15 +150,19 @@ def mock_analyze(tl):
         first, last = g["시간"].min(), g["시간"].max()
         span = _fmt_time(first) + (f" ~ {_fmt_time(last)}" if len(g) > 1 else "")
         checks = sorted((c for c in codes if c[0] in "BR"), key=lambda c: (c[0], int(c[1:])))   # B2 < B10
+        score = score_candidate(levels)
         rows.append(dict(
-            후보ID=f"C{n:02d}", 위험점수=score_candidate(levels),
+            후보ID=f"C{n:02d}", 등급=grade_of(score, codes), 위험점수=score,
             유형=_title(levels, channels, g),
             기간=span, 채널=", ".join(channels), 건수=len(g),
             설명=_summary(g, channels, levels, why),
             근거이벤트=", ".join(g["이벤트ID"]), 점검항목=", ".join(checks),
             판단=levels, 근거=why))
-    # 동점이면 후보ID 순서 유지 (stable) → 같은 입력에서 항상 같은 순서
-    df = pd.DataFrame(rows).sort_values("위험점수", ascending=False, kind="stable").reset_index(drop=True)
+    # 등급 → 내부 점수 순. 동점이면 후보ID 순서 유지 (stable) → 같은 입력에서 항상 같은 순서
+    df = pd.DataFrame(rows)
+    df["_등급순"] = df["등급"].map(grade_rank)
+    df = (df.sort_values(["_등급순", "위험점수"], ascending=[True, False], kind="stable")
+          .drop(columns="_등급순").reset_index(drop=True))
     if not df.empty:
         df["구분"] = ["우선 검토" if i < PRIORITY_MAX else "추가 확인" for i in range(len(df))]
     return df
@@ -177,7 +205,7 @@ def mock_insights(tl, cands):
     points = []
 
     lead = (f"확인 필요 행위 {len(need)}건이 {len(cands)}개 사건으로 묶였고, "
-            f"가장 높은 후보는 '{top.유형}' (위험 점수 {top.위험점수})입니다.")
+            f"가장 높은 후보는 '{top.유형}' (등급 {top.등급})입니다.")
 
     if len(recent):
         share = round(len(recent) / max(len(need), 1) * 100)
@@ -234,7 +262,7 @@ def build_llm_prompt(info, crit_df, cands, tl):
     # 위험 후보 사건
     if not cands.empty:
         cand_text = "\n".join(
-            f"  [{r.구분}] {r.유형} | 위험점수 {r.위험점수} | {r.기간} | {r.건수}건\n    {r.설명}"
+            f"  [{r.구분}] {r.유형} | 등급 {r.등급} | {r.기간} | {r.건수}건\n    {r.설명}"
             for r in cands.head(10).itertuples()
         )
     else:
@@ -286,7 +314,7 @@ DLP·웹 필터·USB·출력 모니터링 데이터를 분석하여 내부 자�
 인터뷰 또는 추가 조사로 확인해야 할 사항을 목록으로 작성하세요.
 
 **4. 최종 위험 수준**
-높음 / 중간 / 낮음 중 하나를 선택하고 판단 근거를 간략히 서술하세요.
+Critical / Medium / Low 중 하나를 선택하고 판단 근거를 간략히 서술하세요.
 """
 
 

@@ -79,3 +79,35 @@ def test_codes_of_two_digit_and_filename_safe():
     s = "B1 보안등급 키워드(대외비) | B10 대용량 전송(150.0MB) | R6 사내·승인 서비스(B2B_계약.pdf)"
     assert crit.codes_of(s) == ["B1", "B10", "R6"]
     assert crit.codes_of("") == [] and crit.codes_of(None) == []
+
+
+class _FakeBook:
+    """LogWorkbook 대신 쓰는 시트 묶음 (header=None 원본 형태)"""
+    def __init__(self, sheets):
+        self.sheets = {k: pd.DataFrame(v) for k, v in sheets.items()}
+        self.sheet_names = list(self.sheets)
+
+
+def test_extract_person_from_account_and_columns():
+    book = _FakeBook({
+        "Web Log": [["시간", "URL", "Account", "부서명"],
+                    ["2026-08-01 10:00:00", "https://a.com", "홍길동(Kildong.Hong) 선임", "보안기술팀"],
+                    ["2026-08-01 11:00:00", "https://b.com", "kildong.hong", "보안기술팀"]],
+    })
+    p = prep.extract_person(book)
+    assert (p["이름"], p["직급"], p["부서"], p["계정"]) == ("홍길동", "선임", "보안기술팀", "kildong.hong")
+    assert p["갈림"] == []
+    assert prep.person_check(p)[1] == "로그에서 확인"
+
+
+def test_extract_person_split_values_need_review():
+    book = _FakeBook({
+        "Web Log": [["시간", "URL", "Account"],
+                    ["2026-08-01 10:00:00", "https://a.com", "홍길동(kildong.hong) 선임"],
+                    ["2026-08-01 10:00:00", "https://a.com", "홍길동(kildong.hong) 선임"],
+                    ["2026-08-01 11:00:00", "https://b.com", "홍길동(kildong.hong) 책임"]],
+    })
+    p = prep.extract_person(book)
+    assert p["직급"] == "선임" and p["갈림"] == ["직급"]
+    assert "확인 필요" in prep.person_check(p)[1]
+    assert prep.extract_person(_FakeBook({}))["이름"] == ""

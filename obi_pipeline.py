@@ -14,12 +14,19 @@ import obi_criteria as crit
 import obi_preprocess as prep
 
 
-def analyze_file(src_path, out_path, info, base_date=None, account=None):
+def read_log(src_path):
+    """업로드 로그를 한 번 읽고 인적 사항을 뽑는다 (REQ-10). 돌려준 workbook 을 analyze_file 에 다시 넘긴다."""
+    xls = prep.LogWorkbook(src_path)
+    return xls, prep.extract_person(xls)
+
+
+def analyze_file(src, out_path, info, base_date=None, account=None):
     """전처리 실행 후 store.save_analysis() 에 넘길 값을 돌려준다.
 
+    src 는 파일 경로 또는 read_log() 가 돌려준 workbook (다시 읽지 않음).
     info 는 복사본을 고쳐서 돌려준다(기준일·계정 채움). 원본 dict 는 건드리지 않는다.
     """
-    checks, status, timeline = prep.run(src_path, out_path, info["퇴직일자"], base_date, account)
+    checks, status, timeline = prep.run(src, out_path, info["퇴직일자"], base_date, account)
     summary = pd.read_excel(out_path, sheet_name="채널요약")
     criteria = pd.read_excel(out_path, sheet_name="기준점검").fillna("")
     cond = pd.read_excel(out_path, sheet_name="분석조건")

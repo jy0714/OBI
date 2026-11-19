@@ -31,6 +31,11 @@ APPROVED_SERVICES = tuple(crit.APPROVED_SERVICES)
 NO_EVENT_MARKERS = {"이벤트 없음", "이벤트없음"}
 USB_LINK_SECONDS = 120       # USB로그와 DLP USB Log를 같은 행위로 연결하는 시간 차
 DLP_MERGE_SECONDS = 60       # DLP 규칙(RULE NAME)만 다른 같은 행위를 하나로 합치는 시간 차
+# 인적 사항 자동 입력 (REQ-10). [결정 필요] 실제 DDI 추출본에서 부서가 있는 컬럼명 확인 전까지 후보만 둔다.
+ACCOUNT_COLUMNS = ("Account", "ACCOUNT", "아이디")               # '홍길동(kildong.hong) 선임' 형태도 옴
+NAME_COLUMNS = ("이름", "성명", "사용자명", "User Name", "USER NAME")
+RANK_COLUMNS = ("직급", "직위", "Title", "TITLE")
+DEPT_COLUMNS = ("부서", "부서명", "소속", "Department", "DEPARTMENT", "Dept")
 
 NOISE_ATTACH = re.compile(r"^(header|textreadercomponent:\d+|image\d{3}\.(png|jpg|jpeg|gif))$", re.I)
 FILE_TYPES = {
@@ -393,11 +398,83 @@ SHEETS = [  # (시트명 앞부분, 헤더 식별 컬럼, 변환 함수, 필수 
 
 
 # ===========================================================================
+# 인적 사항 추출 (REQ-10)
+# ===========================================================================
+_PERSON_RE = re.compile(r"^\s*([^\s()]+)\s*\(\s*([A-Za-z0-9._-]+)\s*\)\s*(\S.*)?$")
+
+
+def _pick(counter):
+    """가장 많이 나온 값 (동률이면 먼저 나온 값). 값이 여러 개면 갈림=True"""
+    if not counter:
+        return "", False
+    best = max(counter.items(), key=lambda kv: kv[1])[0]   # dict 는 삽입 순서 → 동률 시 먼저 나온 값
+    return best, len(counter) > 1
+
+
+def extract_person(xls):
+    """로그에서 이름·직급·부서·계정을 뽑는다.
+
+    돌려주는 값: {"이름", "직급", "부서", "계정": str, "갈림": [항목명...], "후보": {항목: {값: 건수}}}
+    로그에 없는 항목은 빈 문자열. 값이 여러 개면 가장 많이 나온 값 + '갈림'에 항목명.
+    """
+    seen = {k: {} for k in ("이름", "직급", "부서", "계정")}
+
+    def add(key, v):
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return
+        s = str(v).strip()
+        if s and s.lower() != "nan":
+            seen[key][s] = seen[key].get(s, 0) + 1
+
+    for prefix, header_key, _fn, _req in SHEETS:
+        name = find_sheet(xls, prefix)
+        if name is None:
+            continue
+        _st, df = read_sheet(xls, name, header_key)
+        if df is None:
+            continue
+        for col in df.columns:
+            if col in ACCOUNT_COLUMNS:
+                for v in df[col].dropna():
+                    m = _PERSON_RE.match(str(v))
+                    if m:
+                        add("이름", m.group(1))
+                        add("직급", m.group(3))
+                    add("계정", norm_account(v))
+            elif col in NAME_COLUMNS:
+                df[col].dropna().map(lambda v: add("이름", v))
+            elif col in RANK_COLUMNS:
+                df[col].dropna().map(lambda v: add("직급", v))
+            elif col in DEPT_COLUMNS:
+                df[col].dropna().map(lambda v: add("부서", v))
+
+    out, split = {}, []
+    for k, counter in seen.items():
+        out[k], is_split = _pick(counter)
+        if is_split:
+            split.append(k)
+    out["갈림"] = split
+    out["후보"] = seen
+    return out
+
+
+def person_check(person):
+    """검증결과에 넣을 (항목, 결과, 내용)"""
+    found = [f"{k} {person[k]}" for k in ("이름", "직급", "부서") if person.get(k)]
+    if person.get("갈림"):
+        detail = " / ".join(f"{k}: " + ", ".join(f"{v}({n})" for v, n in person["후보"][k].items())
+                            for k in person["갈림"])
+        return ("인적 사항", f"로그 값이 여러 개 ({', '.join(person['갈림'])}) - 확인 필요", detail)
+    return ("인적 사항", "로그에서 확인" if found else "로그에 없음 (직접 입력)", ", ".join(found))
+
+
+# ===========================================================================
 # 메인
 # ===========================================================================
 def run(path_in, path_out, retire_date, base_date=None, person_account=None):
+    """path_in 은 파일 경로 또는 이미 읽은 LogWorkbook (업로드 파일을 한 번만 읽기 위함)"""
     retire = pd.Timestamp(retire_date)
-    xls = LogWorkbook(path_in)
+    xls = path_in if isinstance(path_in, LogWorkbook) else LogWorkbook(path_in)
     print(f"[파일 읽기] {xls.mode}")
     events, status, checks = [], [], []
 
@@ -509,6 +586,7 @@ def run(path_in, path_out, retire_date, base_date=None, person_account=None):
                        f"기준 {period_start.date()} ~ {base.date()} / 로그 {tl['시간'].min()} ~ {tl['시간'].max()}"))
         no_time = int(tl["시간"].isna().sum())
         checks.append(("시간 변환", "정상" if no_time == 0 else f"시간 해석 실패 {no_time}건 - 확인 필요", ""))
+    checks.append(person_check(extract_person(xls)))
     bad = [s for s in status if s["대사결과"].startswith("불일치") or "확인 필요" in s["상태"]]
     checks.append(("시트·행 수 대사", "정상" if not bad else "확인 필요", ", ".join(s["시트"] for s in bad)))
 

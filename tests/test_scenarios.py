@@ -97,3 +97,16 @@ def test_req05_web_upload_and_no_attachment(sample):
     assert len(web) == 1 and "mail.naver.com" in web.iloc[0]["수신자"]
     last = pm.iloc[-1]
     assert last["첨부 수"] == 0 and "me2@daum.net" in last["수신자"]
+
+
+# --- REQ-10 인적 사항 자동 입력 (추출) ---------------------------------------
+def test_req10_extract_from_sample(tmp_path):
+    import obi_pipeline
+    import sample_ddi
+    src = sample_ddi.build(str(tmp_path / "s.xlsx"))
+    xls, person = obi_pipeline.read_log(src)
+    assert (person["이름"], person["직급"], person["계정"]) == ("홍길동", "선임", "kildong.hong")
+    assert person["부서"] == ""                       # 샘플에는 부서 컬럼 없음 → 직접 입력
+    # 같은 workbook 으로 분석 (다시 읽지 않음)
+    r = obi_pipeline.analyze_file(xls, str(tmp_path / "o.xlsx"), {"퇴직일자": "2026-09-30"}, "2026-09-02")
+    assert len(r["timeline"]) > 0

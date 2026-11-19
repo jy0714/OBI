@@ -1,0 +1,7 @@
+# 실행 (검증 환경: Python 3.14 / pandas 3.0.6 / streamlit 1.65.0)
+streamlit>=1.40
+pandas>=2.2
+openpyxl>=3.1
+xlrd>=2.0
+requests>=2.31
+pywin32>=306; sys_platform == "win32"   # 암호화(DRM) 엑셀을 PC의 Excel 로 열 때만 필요

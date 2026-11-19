@@ -159,3 +159,27 @@ OBI (Offboarding Inspector) 코드 변경 이력
   app.py             수정 (_ai_cfg 함수 추가, 탭 1개 추가, 사이드바 변경)
   obi_preprocess.py  수정 (COM 에러 핸들링 개선)
 ================================================================
+
+
+================================================================
+2026-11-19  코드 검토 + 하네스 구축
+================================================================
+상세 검토 결과: docs/code_review_2026-11-19.md
+
+[버그 수정]
+  - obi_preprocess.py : 출력 PC 시간이 빈 칸이면 서버 시간 사용 (NaN 이 `or` 를 통과하던 문제)
+                        업로드 엑셀 파일 핸들 닫기 (Windows 임시 파일 잠금)
+  - obi_ai.py         : 시간 미상(NaT) 이벤트가 있으면 상세 화면이 깨지던 문제
+                        동점 후보 순서 고정 (stable 정렬)
+  - obi_criteria.py   : 수신 도메인 순회 순서 고정 (실행마다 사유 문구 순서가 달라질 수 있던 문제)
+  - obi_store.py      : SQLite 연결을 매번 닫도록 수정
+
+[구조]
+  - obi_pipeline.py 신규 : app.py 의 분석 로직(analyze_file / derive)을 분리 → 앱과 하네스가 같은 경로 사용
+
+[하네스]
+  - tests/harness.py            : check / update / snapshot / compare
+  - tests/fixtures/sample_ddi.py: 합성 DDI 로그 생성기 (B1~B9, R1~R6 전부 지나감, 개인정보 없음)
+  - tests/golden/sample/        : 기준 결과 (schema / excel / app / prompt)
+  - tests/test_*.py             : 골든·형식 계약·단위·LLM 스트리밍 파서·화면 스모크 (51개)
+  - pytest.ini, requirements.txt, requirements-dev.txt, .gitignore(tests/_out, tests/local, *.zip)

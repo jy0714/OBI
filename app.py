@@ -12,7 +12,7 @@ import pandas as pd
 import streamlit as st
 
 import obi_ai as ai
-import obi_preprocess as prep
+import obi_pipeline as pipeline
 import obi_store as store
 
 st.set_page_config(page_title="OBI · Offboarding Inspector", page_icon="🛡️", layout="wide",
@@ -100,15 +100,8 @@ def run_analysis(uploaded, info, base_date):
         out = os.path.join(tmp, "result.xlsx")
         with open(src, "wb") as f:
             f.write(uploaded.getbuffer())
-        checks, _status, timeline = prep.run(src, out, info["퇴직일자"], base_date)
-        summary = pd.read_excel(out, sheet_name="채널요약")
-        criteria = pd.read_excel(out, sheet_name="기준점검").fillna("")
-        cond = pd.read_excel(out, sheet_name="분석조건")
-    base_row = cond[cond["항목"] == "기준일"]["값"]
-    info["기준일"] = str(base_row.iloc[0]).split(" ")[0] if len(base_row) else ""
-    accounts = timeline["계정"].replace("", pd.NA).dropna() if "계정" in timeline else pd.Series(dtype=str)
-    info["계정"] = accounts.mode().iloc[0] if len(accounts) else ""   # 로그에서 가장 많이 나온 계정
-    return store.save_analysis(info, checks, summary, timeline, criteria)
+        r = pipeline.analyze_file(src, out, info, base_date)
+    return store.save_analysis(r["info"], r["checks"], r["summary"], r["timeline"], r["criteria"])
 
 
 # ---------------------------------------------------------------------------
@@ -176,8 +169,7 @@ def render_detail(analysis_id, key):
     crit = a.get("기준점검", pd.DataFrame())
     need = col_is(tl, "점검결과", "확인 필요")
     ref = col_is(tl, "점검결과", "참고")
-    cands = ai.mock_analyze(tl)
-    lead_text, points = ai.mock_insights(tl, cands)
+    cands, lead_text, points = pipeline.derive(tl)
     top_score = int(cands["위험점수"].max()) if not cands.empty else 0
 
     # ---------------- 헤더 ----------------

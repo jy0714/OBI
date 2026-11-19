@@ -8,6 +8,7 @@ OBI 이력 저장소 (SQLite)
 import json
 import os
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime
 
 import pandas as pd
@@ -18,11 +19,18 @@ DB_PATH = os.environ.get("OBI_DB_PATH", os.path.join(os.path.dirname(os.path.abs
 LEGACY_COLUMNS = ["회사", "이름", "직급", "부서", "분류", "퇴직일자", "인터뷰 여부", "보안서약서 작성 여부", "Comment 및 확인 결과"]
 
 
+@contextmanager
 def _conn():
+    """커밋(오류 시 롤백) 후 연결을 반드시 닫는다.
+    sqlite3 연결의 기본 with 문은 커밋만 하고 닫지 않아 Windows 에서 DB 파일이 잠긴 채 남는다."""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     con = sqlite3.connect(DB_PATH, timeout=15)   # 다른 사람이 저장 중이면 최대 15초 대기
     con.row_factory = sqlite3.Row
-    return con
+    try:
+        with con:
+            yield con
+    finally:
+        con.close()
 
 
 def init_db():

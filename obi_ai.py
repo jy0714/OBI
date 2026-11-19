@@ -120,7 +120,7 @@ def mock_analyze(tl):
                           + ("최근 30일" if (g["기간"] == "최근").any() else "")}
 
         first, last = g["시간"].min(), g["시간"].max()
-        span = first.strftime("%m-%d %H:%M") + (f" ~ {last.strftime('%m-%d %H:%M')}" if len(g) > 1 else "")
+        span = _fmt_time(first) + (f" ~ {_fmt_time(last)}" if len(g) > 1 else "")
         checks = sorted({m for m in re.findall(r"\b[BR]\d\b", reasons)})
         rows.append(dict(
             후보ID=f"C{n:02d}", 위험점수=score_candidate(levels),
@@ -129,10 +129,16 @@ def mock_analyze(tl):
             설명=_summary(g, channels, levels, why),
             근거이벤트=", ".join(g["이벤트ID"]), 점검항목=", ".join(checks),
             판단=levels, 근거=why))
-    df = pd.DataFrame(rows).sort_values("위험점수", ascending=False).reset_index(drop=True)
+    # 동점이면 후보ID 순서 유지 (stable) → 같은 입력에서 항상 같은 순서
+    df = pd.DataFrame(rows).sort_values("위험점수", ascending=False, kind="stable").reset_index(drop=True)
     if not df.empty:
         df["구분"] = ["우선 검토" if i < PRIORITY_MAX else "추가 확인" for i in range(len(df))]
     return df
+
+
+def _fmt_time(t):
+    """시간 해석에 실패한 이벤트(NaT)도 화면이 깨지지 않도록 표시"""
+    return t.strftime("%m-%d %H:%M") if pd.notna(t) else "시간 미상"
 
 
 def _title(levels, channels, g):
@@ -147,7 +153,7 @@ def _title(levels, channels, g):
 
 
 def _summary(g, channels, levels, why):
-    head = ", ".join(f"{r['시간']:%m-%d %H:%M} {r['채널']} {r['행위']}" for _, r in g.head(3).iterrows())
+    head = ", ".join(f"{_fmt_time(r['시간'])} {r['채널']} {r['행위']}" for _, r in g.head(3).iterrows())
     tail = f" 외 {len(g) - 3}건" if len(g) > 3 else ""
     return (f"{head}{tail}. {why['자료 민감도']}, {why['행위 맥락']}."
             + (f" {why['흐름 연결']}." if levels["흐름 연결"] != "낮음" else ""))

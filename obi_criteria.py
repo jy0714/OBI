@@ -123,7 +123,7 @@ def apply_criteria(tl):
         files = [f for f in (r.get("파일목록") or []) if str(f).strip()]
         names = " ".join(map(str, files)) + " " + str(r.get("대상") or "")
         rcpts = [x.strip() for x in str(r.get("수신자") or "").split(",") if x.strip()]
-        doms = {_domain(x) for x in rcpts}
+        doms = sorted({_domain(x) for x in rcpts})   # set 순회 순서는 실행마다 달라질 수 있어 정렬
         dom = _domain(r.get("대상")) if ch in ("웹", "웹 업로드") else ""
 
         personal_doc = _has_kw(names, PERSONAL_DOC_KEYWORDS)

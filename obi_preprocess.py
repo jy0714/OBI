@@ -129,17 +129,20 @@ class LogWorkbook:
             head = f.read(8)
         if head.startswith(b"PK"):
             self.mode = "일반 xlsx (pandas)"
-            xl = pd.ExcelFile(self.path, engine="openpyxl")
-            self.sheets = {n: pd.read_excel(xl, sheet_name=n, header=None) for n in xl.sheet_names}
+            self.sheets = self._read_pandas("openpyxl")
         else:
             try:  # 옛 xls 형식이면 xlrd로 읽힘
-                xl = pd.ExcelFile(self.path, engine="xlrd")
+                self.sheets = self._read_pandas("xlrd")
                 self.mode = "옛 xls (pandas)"
-                self.sheets = {n: pd.read_excel(xl, sheet_name=n, header=None) for n in xl.sheet_names}
             except Exception:
                 self.mode = "암호화 파일 (엑셀 연동)"
                 self._read_via_excel()
         self.sheet_names = list(self.sheets)
+
+    def _read_pandas(self, engine):
+        # with 로 닫아야 Windows 에서 업로드 임시 파일이 잠기지 않는다
+        with pd.ExcelFile(self.path, engine=engine) as xl:
+            return {n: pd.read_excel(xl, sheet_name=n, header=None) for n in xl.sheet_names}
 
     def _read_via_excel(self):
         try:
@@ -262,7 +265,10 @@ def conv_print(df, sheet):
         pages = pd.to_numeric(r.get("출력페이지"), errors="coerce")
         copies = pd.to_numeric(r.get("출력매수"), errors="coerce")
         fname = r.get("출력파일")
-        out.append(ev(시간=parse_time(r.get("출력시간(PC)") or r.get("출력시간(서버)")), 채널="출력",
+        t = parse_time(r.get("출력시간(PC)"))
+        if pd.isna(t):   # 빈 칸은 NaN(참)이라 `or` 로는 서버 시간으로 넘어가지 않는다
+            t = parse_time(r.get("출력시간(서버)"))
+        out.append(ev(시간=t, 채널="출력",
                       행위="PDF 변환(가상 프린터)" if "pdf" in printer.lower() else "종이 출력",
                       대상=fname, 파일목록=[fname], 계정=norm_account(r.get("아이디")),
                       상세=f"프로그램: {r.get('응용프로그램')} | 문서등급: {r.get('출력형식')} | 프린터: {printer}",

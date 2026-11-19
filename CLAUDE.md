@@ -18,6 +18,24 @@ The preprocessor can also be run standalone (useful for batch/debugging):
 python obi_preprocess.py 입력.xlsx 출력.xlsx --retire-date 2026-09-30 [--base-date 2026-09-02] [--account kildong.hong]
 ```
 
+## Harness (same input → same output) — run on every change
+
+```bash
+python -m pytest                      # 51 tests: golden + contracts + units + LLM stream parsers + app smoke
+python tests/harness.py check         # golden diff only, human-readable
+python tests/harness.py update        # after an INTENDED output change → review `git diff tests/golden`
+python tests/harness.py snapshot 실제로그.xlsx --retire-date 2026-09-30 --name 홍길동   # local baseline (tests/local/, gitignored)
+python tests/harness.py compare  실제로그.xlsx --retire-date 2026-09-30 --name 홍길동   # check refactors against real data
+```
+
+Development rules:
+- Input is `tests/fixtures/sample_ddi.py` (synthetic, built at test time; `.xlsx` is never committed). New rule/edge case → add rows there + a line in `SCENARIO_NOTES`, then `update`.
+- Golden snapshots in `tests/golden/sample/`: `schema.json` (columns = **format**), `excel.json` (exported workbook), `app.json` (after DB round-trip, what the UI shows), `prompt.txt` (LLM prompt). A diff in `schema.json` means the format changed — call it out explicitly.
+- Never `update` golden to make a failing test pass without explaining the diff to the user.
+- `tests/test_contracts.py` holds invariants that must survive the LLM swap (candidate columns, 판단 keys = `WEIGHTS`, score = `score_candidate(판단)`, every `확인 필요` event in exactly one candidate). LLM reports must pass `harness.check_report_format()`.
+- Output must not depend on set/dict iteration order or wall-clock time (`test_deterministic_across_processes` runs with two `PYTHONHASHSEED`s).
+- `obi_pipeline.py` is the single headless path used by both `app.py` and the harness — put non-UI logic there, not in `app.py`.
+
 ## Dependencies
 
 Core: `streamlit`, `pandas`, `openpyxl`, `xlrd`  
@@ -31,6 +49,8 @@ obi_preprocess.py — DDI log → unified timeline + verification checks
 obi_criteria.py   — check rules (B/R codes) + keyword/domain dictionaries
 obi_ai.py         — mock risk scorer; main LLM integration point
 obi_store.py      — SQLite persistence (data/obi_history.db)
+obi_pipeline.py   — headless path shared by app and harness: analyze_file() / derive()
+tests/            — harness.py (golden runner), fixtures/sample_ddi.py, golden/, test_*.py
 ```
 
 ### Data flow

@@ -37,6 +37,13 @@ PRINT_REPEAT_MIN = 2        # 같은 파일 출력 횟수 기준
 PRINT_DAY_MIN = 20          # 특정일 출력 급증: 하루 출력 건수 최소값
 PRINT_DAY_RATIO = 3         # 특정일 출력 급증: 출력한 날 평균 대비 배수
 USB_REPEAT_MIN = 10         # USB 쓰기·삭제 반복 기준 (요약에 표시)
+# [결정 필요] 대용량 전송 기준 (REQ-01). 임시 기본값 — 실제 로그 분포 확인 후 조정
+#   python tests/harness.py snapshot 로그.xlsx ... 실행 시 채널별 용량 분포가 출력된다.
+SIZE_SINGLE_MIN_MB = 100    # 단일 행위 용량
+SIZE_DAY_MIN_MB = 500       # 하루 합계 용량
+SIZE_DAY_EVENT_MIN_MB = 1   # 하루 합계 초과일에 B10 을 붙일 개별 행위 최소 용량 (작은 웹 접속까지 표시하지 않도록)
+SIZE_CHANNELS = ("이메일", "웹 업로드", "USB", "USB(DLP)", "웹")   # 웹은 허용된 접속의 SentBytes
+MB = 1024 * 1024
 
 # ===========================================================================
 # 점검 항목 정의 (화면·보고서에 그대로 표시)
@@ -47,10 +54,12 @@ CODE_CHECKS = [
     ("B3", "자료 종류 키워드 반출·출력", "도면·매뉴얼·AOP·Plan·자리배치·임직원·컨설팅·계약서·사진 파일의 외부 발송·업로드·USB·출력"),
     ("B4", "개인 클라우드·개인메일 사이트 이용", "허용된 웹 접속 또는 파일 업로드 중 개인 클라우드·개인메일 사이트"),
     ("B5", "USB 사용 허용", "USB 파일 기록이 허용된 경우 (쓰기·삭제 반복 여부 함께 표시)"),
-    ("B6", "단일 출력 50매 이상", f"한 번에 {PRINT_PAGES_MIN}매 이상 출력"),
+    ("B6", f"단일 출력 {PRINT_PAGES_MIN}매 이상", f"한 번에 {PRINT_PAGES_MIN}매 이상 출력"),
     ("B7", "같은 파일 반복 출력", f"같은 파일을 {PRINT_REPEAT_MIN}회 이상 출력"),
     ("B8", "특정일 출력 급증", f"하루 {PRINT_DAY_MIN}건 이상이면서 출력한 날 평균의 {PRINT_DAY_RATIO}배 이상"),
     ("B9", "파일명 모호", "출력·반출 파일명이 모호해 내용 확인이 필요"),
+    ("B10", "대용량 전송", f"한 번에 {SIZE_SINGLE_MIN_MB}MB 이상 또는 하루 합계 {SIZE_DAY_MIN_MB}MB 이상 전송 "
+                         "(이메일·웹 업로드·USB·허용된 웹 접속, 차단 건 제외)"),
 ]
 REFERENCE_CHECKS = [
     ("R1", "차단 완료", "보안 솔루션이 차단한 기록 (차단이 정상 동작한 것으로 보고 우선 검토 제외)"),
@@ -112,6 +121,21 @@ def _is_ambiguous(name):
     return bool(st) and any(re.search(p, st) for p in AMBIGUOUS_NAME_PATTERNS)
 
 
+def fmt_mb(n_bytes):
+    return f"{n_bytes / MB:,.1f}MB"
+
+
+def transfer_bytes(tl):
+    """전송 용량으로 셀 값 (Series, 대상 아니면 0).
+    허용된 전송 채널만, USB 삭제는 제외, USB로그와 중복 기록된 DLP USB 는 한 번만 센다."""
+    size = pd.to_numeric(tl["용량_bytes"], errors="coerce").fillna(0)
+    ok = tl["채널"].isin(SIZE_CHANNELS) & (tl["차단여부"] != "차단")
+    ok &= ~tl["행위"].astype(str).str.contains("delete", case=False)
+    if "중복기록" in tl:
+        ok &= ~((tl["채널"] == "USB(DLP)") & (tl["중복기록"].fillna("") != ""))
+    return size.where(ok, 0)
+
+
 # ===========================================================================
 # 점검 실행
 # ===========================================================================
@@ -126,6 +150,11 @@ def apply_criteria(tl):
     day_cnt = pr["시간"].dt.date.value_counts() if len(pr) else pd.Series(dtype=int)
     day_avg = day_cnt.mean() if len(day_cnt) else 0
     surge_days = {d for d, c in day_cnt.items() if c >= PRINT_DAY_MIN and c >= day_avg * PRINT_DAY_RATIO}
+
+    # 대용량 전송 (단일 / 하루 합계)
+    sent = transfer_bytes(tl)
+    sent_day = sent.groupby(tl["시간"].dt.date).sum() if len(tl) else pd.Series(dtype=float)
+    big_days = {d: v for d, v in sent_day.items() if v >= SIZE_DAY_MIN_MB * MB}
 
     for i, r in tl.iterrows():
         ch, blocked = r["채널"], r["차단여부"] == "차단"
@@ -201,6 +230,14 @@ def apply_criteria(tl):
             if amb:
                 hits[i].append(("B9", ", ".join(map(str, amb))))
 
+        # B10 대용량 전송 (차단 건은 transfer_bytes 에서 0 → R1 만 남음)
+        b = sent[i]
+        day = r["시간"].date() if pd.notna(r["시간"]) else None
+        if b >= SIZE_SINGLE_MIN_MB * MB:
+            hits[i].append(("B10", fmt_mb(b)))
+        elif day in big_days and b >= SIZE_DAY_EVENT_MIN_MB * MB:
+            hits[i].append(("B10", f"{fmt_mb(b)}, {day} 하루 합계 {fmt_mb(big_days[day])}"))
+
     def fmt(lst):
         seen, out = set(), []
         for c, d in lst:
@@ -226,6 +263,8 @@ def apply_criteria(tl):
             dlp = int((tl["채널"] == "USB(DLP)").sum())
             note = f"USB로그 쓰기 {writes}건 · 삭제 {dels}건 / DLP 반출 {dlp}건" + \
                    (" · 반복 사용: USB 잔존 여부·개인/회사 USB 확인 필요" if writes + dels >= USB_REPEAT_MIN else "")
+        if cid == "B10" and big_days:
+            note = "하루 합계 초과: " + ", ".join(f"{d} {fmt_mb(v)}" for d, v in sorted(big_days.items()))
         rows.append(dict(구분="기준 점검" if cid.startswith("B") else "참고 관찰", 코드=cid, 항목=name,
                          결과=f"해당 {len(ids)}건" if ids else "해당 없음", 비고=note,
                          이벤트ID=", ".join(ids), 기준=desc))

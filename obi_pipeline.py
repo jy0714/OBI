@@ -10,6 +10,7 @@ app.py 와 하네스(tests/harness.py)가 모두 이 함수들을 거친다.
 import pandas as pd
 
 import obi_ai as ai
+import obi_criteria as crit
 import obi_preprocess as prep
 
 
@@ -29,6 +30,20 @@ def analyze_file(src_path, out_path, info, base_date=None, account=None):
     accounts = timeline["계정"].replace("", pd.NA).dropna() if "계정" in timeline else pd.Series(dtype=str)
     info["계정"] = accounts.mode().iloc[0] if len(accounts) else ""   # 로그에서 가장 많이 나온 계정
     return dict(info=info, checks=checks, status=status, summary=summary, timeline=timeline, criteria=criteria)
+
+
+def size_stats(tl):
+    """채널별 전송 용량 분포 (REQ-01 기준값 결정용). 용량이 있는 행만 센다."""
+    cols = ["채널", "건수", "중앙값_MB", "상위5%_MB", "최대_MB", "기준이상_건수"]
+    if tl.empty or "용량_bytes" not in tl:
+        return pd.DataFrame(columns=cols)
+    size = pd.to_numeric(tl["용량_bytes"], errors="coerce")
+    rows = []
+    for ch, s in size[size > 0].groupby(tl["채널"]):
+        mb = s / crit.MB
+        rows.append([ch, len(s), round(mb.median(), 1), round(mb.quantile(0.95), 1), round(mb.max(), 1),
+                     int((mb >= crit.SIZE_SINGLE_MIN_MB).sum())])
+    return pd.DataFrame(rows, columns=cols)
 
 
 def derive(tl):

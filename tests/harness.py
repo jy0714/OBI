@@ -221,8 +221,12 @@ def main(argv=None):
     if a.cmd in ("check", "update"):
         results, folder = run_sample(), GOLDEN_DIR
     else:
-        results = run_case(a.input, a.retire_date, a.base_date, a.account)
+        x = execute(a.input, a.retire_date, a.base_date, a.account)
+        results = render(x)
         folder = os.path.join(LOCAL_DIR, a.name)
+        crit = sys.modules["obi_criteria"]
+        print(f"\n[채널별 전송 용량 분포] 현재 기준: 단일 {crit.SIZE_SINGLE_MIN_MB}MB / 하루 {crit.SIZE_DAY_MIN_MB}MB")
+        print(pipeline.size_stats(x["tl"]).to_string(index=False) + "\n")
     save(results, OUT_DIR)
 
     if a.cmd in ("update", "snapshot"):

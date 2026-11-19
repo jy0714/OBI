@@ -36,3 +36,40 @@ def test_p3_same_file_repeated_is_one_case(sample):
     prints = tl[(tl["채널"] == "출력") & tl["대상"].astype(str).str.contains("대외비_사업계획")]["이벤트ID"].tolist()
     assert len(prints) == 2
     assert _cand_of(cands, prints[0]).후보ID == _cand_of(cands, prints[1]).후보ID
+
+
+# --- REQ-01 대용량 전송 -------------------------------------------------------
+def _codes(tl, eid):
+    import obi_criteria as crit
+    return crit.codes_of(_tl_row(tl, eid)["점검사유"])
+
+
+def test_req01_single_and_boundary(sample):
+    tl = sample["tl"]
+    assert "B10" in _codes(tl, _eid(tl, 대상="youtube.com"))                 # 웹 접속 120MB
+    assert "B10" in _codes(tl, _eid(tl, 대상="wetransfer.com"))              # 정확히 100MB (경계 포함)
+    assert "B10" not in _codes(tl, _eid(tl, 대상="backup_99.zip"))           # 99.9MB
+    big = _eid(tl, 대상="big.iso")                                            # 차단 200MB → R1 만
+    assert "B10" not in _codes(tl, big) and "R1" in _codes(tl, big)
+    yt = _tl_row(tl, _eid(tl, 대상="youtube.com"))
+    assert yt["점검결과"] == "확인 필요" and "120.0MB" in yt["점검사유"]
+
+
+def test_req01_day_total(sample):
+    tl = sample["tl"]
+    day = tl[tl["대상"].astype(str).str.contains("현장영상")]
+    assert len(day) == 6
+    assert all("하루 합계 540.0MB" in r for r in day["점검사유"])
+
+
+def test_req01_criteria_row(sample):
+    c = sample["crit"].set_index("코드")
+    assert c.loc["B10", "결과"].startswith("해당")
+    assert "2026-08-19" in c.loc["B10", "비고"]
+    assert "100MB" in c.loc["B10", "기준"] and "500MB" in c.loc["B10", "기준"]
+
+
+def test_req01_size_stats(sample):
+    import obi_pipeline
+    s = obi_pipeline.size_stats(sample["tl"]).set_index("채널")
+    assert s.loc["웹", "최대_MB"] == 120.0

@@ -25,7 +25,11 @@ SCENARIO_NOTES = {
     "dlp_email": "개인메일 첨부(B2·B3)·같은 메일 규칙별 인시던트 병합·사내 동반(R2)·공공기관(R3)·차단(R1)",
     "dlp_web": "개인 클라우드 업로드(B4·B3)·승인 서비스(R6)",
     "dlp_usb": "USB 반출(B5·B3) — USB로그와 120초 이내 → 중복기록",
+    "size": "REQ-01 B10: 웹 접속 120MB(단일), 업로드 정확히 100MB(경계 포함), USB 99.9MB(경계 미만), "
+            "하루 6×90MB=540MB(하루 합계), 차단된 200MB(R1만)",
 }
+
+MB = 1024 * 1024
 
 DLP_HEADER = ["INCIDENT ID", "TIME", "ACCOUNT", "EMAIL SUBJECT", "SENDER", "RECIPIENTS or URL",
               "ATTACHED FILE", "FILE SIZE", "RULE NAME", "BLOCKEDSTATUS", "TARGET PATH", "APPLICATION"]
@@ -57,6 +61,7 @@ def build(path):
         [_dt("2026-07-01 09:30:00"), "https://drive.google.com/drive", "Personal Storage", ACCOUNT, 0, "거부"],
         [_dt("2026-06-03 10:00:00"), "https://www.law.go.kr/main", "Government", ACCOUNT, 500, "허용"],
         ["2026. 8. 23. 오후 3:10:00", "https://news.example.com/a", "News", ACCOUNT, 100, "허용"],
+        [_dt("2026-08-31 23:10:00"), "https://www.youtube.com/upload", "Streaming Media", ACCOUNT, 120 * MB, "허용"],
     ], title="Web Log 추출 결과")
 
     _sheet(wb, "USB로그", ["Begin Time", "Time", "Device ID", "File Name", "Action", "Account",
@@ -67,6 +72,13 @@ def build(path):
          "E:\\설계도면_v2.dwg", "Delete", ACCOUNT, "explorer.exe", 2_048_000, "Continue"],
         ["Begin: 2026-04-10 13:00:00", "2026-04-10 13:00:01", "Device ID: USB\\VID_1111&PID_2222",
          "E:\\report.xlsx", "Write", ACCOUNT, "excel.exe", 10_000, "Block"],
+        ["Begin: 2026-08-14 10:00:00", "2026-08-14 10:00:01", "Device ID: USB\\VID_0781&PID_5581",
+         "E:\\backup_99.zip", "Write", ACCOUNT, "explorer.exe", int(99.9 * MB), "Continue"],
+        ["Begin: 2026-08-18 09:00:00", "2026-08-18 09:00:01", "Device ID: USB\\VID_0781&PID_5581",
+         "E:\\big.iso", "Write", ACCOUNT, "explorer.exe", 200 * MB, "Block"],
+    ] + [
+        [f"Begin: 2026-08-19 14:0{k}:00", f"2026-08-19 14:0{k}:01", "Device ID: USB\\VID_0781&PID_5581",
+         f"E:\\현장영상_0{k}.mp4", "Write", ACCOUNT, "explorer.exe", 90 * MB, "Continue"] for k in range(1, 7)
     ])
 
     _sheet(wb, "출력물로그", ["출력시간(PC)", "출력시간(서버)", "프린터명", "출력페이지", "출력매수", "출력파일",
@@ -109,6 +121,8 @@ def build(path):
          "Plan_2027.pptx", 3_500_000, "클라우드 업로드", "Allowed", None, "chrome.exe"],
         ["INC-2002", "2026-08-05 15:00:00", ACCOUNT, None, None, "https://acme.agiloft.com/ui",
          "계약서_검토본.pdf", 400_000, "외부 업로드", "Allowed", None, "chrome.exe"],
+        ["INC-2003", "2026-08-31 22:00:00", ACCOUNT, None, None, "https://wetransfer.com/upload",
+         "프로젝트_자료.zip", 100 * MB, "클라우드 업로드", "Allowed", None, "chrome.exe"],
     ])
 
     _sheet(wb, "DLP USB Log", DLP_HEADER, [

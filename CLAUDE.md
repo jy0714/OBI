@@ -105,6 +105,8 @@ Edit the top sections of these files to tune for the deployment environment:
 
 SQLite at `./data/obi_history.db` by default. Override with the `OBI_DB_PATH` environment variable. Timeline and criteria tables are stored as JSON blobs. Do **not** place the DB file in OneDrive/SharePoint sync folders — concurrent sync can corrupt it.
 
+Security pledge PDFs (REQ-12) are stored under `OBI_FILES_DIR` (default `./data/pledges/`, gitignored). Same rule: **never in OneDrive/SharePoint sync folders** — they contain signatures and personal data, and sync can leave the folder out of step with the `pledges` table. Server-side file names are generated (`<이력id>_<일시>_<sha앞8>.pdf`); the uploader's file name is only stored in the DB. Re-upload adds a row (latest = current); delete is a mark (`mark_pledge_deleted`), files are removed only when a Test analysis is hard-deleted. Tests always point `OBI_FILES_DIR`/`OBI_DB_PATH` at temp folders (autouse fixture in `tests/conftest.py`).
+
 ### Encrypted Excel handling
 
 `LogWorkbook` in `obi_preprocess.py` detects the file type by magic bytes. Non-`PK` files that also fail `xlrd` are opened via `win32com.client.DispatchEx("Excel.Application")` — this requires a licensed Excel installation and `pywin32` on the same Windows machine.

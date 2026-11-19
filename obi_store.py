@@ -43,6 +43,19 @@ LIST_COLUMNS = ["id", "분석일시", "분석자", "회사", "이름", "직급",
                 "검증상태", "인터뷰여부", "보안서약서", "검토상태", "검토자", "코멘트",
                 "테스트여부", "최고등급", "확인필요건수", "AI생성일시"]
 
+# 보안서약서 PDF 보관 (REQ-12) — 서명·개인정보가 들어 있으므로 동기화 폴더에 두지 않는다
+DEFAULT_FILES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "pledges")
+PLEDGE_MAX_MB = 20          # [임시] 업로드 상한
+# [결정 필요 #9] 보관 기간·파기: 자동 삭제 없음, 삭제는 수동(mark_pledge_deleted = 삭제 표시)
+# [결정 필요 #11] 열람 범위: 로그인 없음 → 제한 없이 내려받되 내려받기 이력(누가·언제)을 남긴다
+
+
+def files_dir():
+    """서약서 저장 폴더 (환경 변수 OBI_FILES_DIR, 기본 ./data/pledges). 없으면 만든다."""
+    d = os.environ.get("OBI_FILES_DIR") or DEFAULT_FILES_DIR
+    os.makedirs(d, exist_ok=True)
+    return d
+
 
 def _now():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -84,6 +97,18 @@ def init_db():
             CREATE TABLE IF NOT EXISTS reports (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 analysis_id INTEGER, 생성일시 TEXT, 생성자 TEXT, 형식 TEXT, 파일명 TEXT
+            )""")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS pledges (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                analysis_id INTEGER, 저장파일명 TEXT, 원본파일명 TEXT, 크기 INTEGER, sha256 TEXT,
+                올린사람 TEXT, 올린일시 TEXT,
+                삭제여부 INTEGER DEFAULT 0, 삭제자 TEXT DEFAULT '', 삭제일시 TEXT DEFAULT ''
+            )""")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS pledge_downloads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pledge_id INTEGER, analysis_id INTEGER, 내려받은사람 TEXT, 일시 TEXT
             )""")
 
 
@@ -139,15 +164,126 @@ def mark_deleted(analysis_id, who):
 
 
 def delete_analysis(analysis_id):
-    """실제 삭제. Test 이력만 허용한다 (정식 이력은 mark_deleted)."""
+    """실제 삭제. Test 이력만 허용한다 (정식 이력은 mark_deleted). 서약서 파일도 함께 지운다 (REQ-12)."""
     with _conn() as con:
         r = con.execute("SELECT 테스트여부 FROM analyses WHERE id=?", (analysis_id,)).fetchone()
         if r is None:
             return
         if not r["테스트여부"]:
             raise PermissionError("정식 이력은 실제로 삭제할 수 없습니다. 삭제 표시(mark_deleted)를 사용하세요.")
+        files = [x["저장파일명"] for x in
+                 con.execute("SELECT 저장파일명 FROM pledges WHERE analysis_id=?", (analysis_id,)).fetchall()]
         con.execute("DELETE FROM analyses WHERE id=?", (analysis_id,))
         con.execute("DELETE FROM reports WHERE analysis_id=?", (analysis_id,))
+        con.execute("DELETE FROM pledges WHERE analysis_id=?", (analysis_id,))
+        con.execute("DELETE FROM pledge_downloads WHERE analysis_id=?", (analysis_id,))
+    for f in files:                      # DB 삭제가 확정된 뒤 파일 정리
+        p = os.path.join(files_dir(), f)
+        if os.path.exists(p):
+            os.remove(p)
+
+
+# ---------------------------------------------------------------------------
+# 보안서약서 PDF (REQ-12)
+# ---------------------------------------------------------------------------
+PLEDGE_COLUMNS = ["id", "analysis_id", "저장파일명", "원본파일명", "크기", "sha256", "올린사람", "올린일시",
+                  "삭제여부", "삭제자", "삭제일시"]
+
+
+def validate_pledge(filename, data):
+    """PDF 만 받는다. 문제가 있으면 이유를 담은 ValueError."""
+    if not str(filename or "").lower().endswith(".pdf"):
+        raise ValueError("PDF 파일만 올릴 수 있습니다 (확장자가 .pdf 가 아님).")
+    if not data:
+        raise ValueError("빈 파일입니다.")
+    if len(data) > PLEDGE_MAX_MB * 1024 * 1024:
+        raise ValueError(f"파일이 너무 큽니다 ({len(data) / 1024 / 1024:,.1f}MB > {PLEDGE_MAX_MB}MB).")
+    if not bytes(data[:5]) == b"%PDF-":
+        raise ValueError("PDF 파일이 아닙니다 (확장자만 .pdf 이고 내용이 PDF 형식이 아님).")
+
+
+def save_pledge(analysis_id, filename, data, who):
+    """서약서 저장. 서버 파일명은 서버가 만들고(원본 파일명은 DB 에만), 이전 파일은 지우지 않고 새 행 추가.
+    파일을 먼저 쓰고 DB 에 기록하며, DB 기록이 실패하면 쓴 파일을 지운다. 올리면 보안서약서 = '예'."""
+    import hashlib
+    validate_pledge(filename, data)
+    sha = hashlib.sha256(data).hexdigest()
+    now = datetime.now()
+    stored = f"{int(analysis_id)}_{now.strftime('%Y%m%d_%H%M%S_%f')}_{sha[:8]}.pdf"
+    path = os.path.join(files_dir(), stored)
+    tmp = path + ".part"
+    with open(tmp, "wb") as f:
+        f.write(data)
+    os.replace(tmp, path)
+    try:
+        with _conn() as con:
+            if con.execute("SELECT 1 FROM analyses WHERE id=?", (analysis_id,)).fetchone() is None:
+                raise LookupError(f"이력 #{analysis_id} 가 없습니다.")
+            cur = con.execute("""INSERT INTO pledges (analysis_id, 저장파일명, 원본파일명, 크기, sha256, 올린사람, 올린일시)
+                                 VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                              (analysis_id, stored, os.path.basename(str(filename)), len(data), sha, who,
+                               now.strftime("%Y-%m-%d %H:%M:%S")))
+            con.execute("UPDATE analyses SET 보안서약서='예' WHERE id=?", (analysis_id,))
+            pid = cur.lastrowid
+    except Exception:
+        if os.path.exists(path):
+            os.remove(path)
+        raise
+    return pid
+
+
+def list_pledges(analysis_id, include_deleted=False):
+    where = "" if include_deleted else "AND COALESCE(삭제여부, 0) = 0"
+    with _conn() as con:
+        rows = con.execute(f"SELECT {', '.join(PLEDGE_COLUMNS)} FROM pledges WHERE analysis_id=? {where} "
+                           "ORDER BY id DESC", (analysis_id,)).fetchall()
+    return pd.DataFrame([dict(r) for r in rows], columns=PLEDGE_COLUMNS)
+
+
+def current_pledge(analysis_id):
+    """가장 최근에 올린(삭제 표시 안 된) 서약서 dict, 없으면 None"""
+    df = list_pledges(analysis_id)
+    return None if df.empty else df.iloc[0].to_dict()
+
+
+def read_pledge(pledge_id, who):
+    """서약서 파일 bytes (내려받기 버튼을 눌렀을 때만 호출). 무결성 확인 후 내려받기 이력 기록."""
+    import hashlib
+    with _conn() as con:
+        r = con.execute("SELECT * FROM pledges WHERE id=?", (pledge_id,)).fetchone()
+    if r is None:
+        raise LookupError("서약서 기록이 없습니다.")
+    path = os.path.join(files_dir(), r["저장파일명"])
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"서약서 파일이 저장 위치에 없습니다: {r['저장파일명']}")
+    with open(path, "rb") as f:
+        data = f.read()
+    if hashlib.sha256(data).hexdigest() != r["sha256"]:
+        raise ValueError("서약서 파일이 기록과 다릅니다 (SHA-256 불일치).")
+    with _conn() as con:
+        con.execute("INSERT INTO pledge_downloads (pledge_id, analysis_id, 내려받은사람, 일시) VALUES (?, ?, ?, ?)",
+                    (pledge_id, r["analysis_id"], who, _now()))
+    return data
+
+
+def list_pledge_downloads(analysis_id):
+    with _conn() as con:
+        rows = con.execute("SELECT pledge_id, 내려받은사람, 일시 FROM pledge_downloads WHERE analysis_id=? "
+                           "ORDER BY id DESC", (analysis_id,)).fetchall()
+    return pd.DataFrame([dict(r) for r in rows], columns=["pledge_id", "내려받은사람", "일시"])
+
+
+def mark_pledge_deleted(pledge_id, who):
+    """서약서 삭제 표시 (파일은 지우지 않음). 남은 서약서가 없으면 보안서약서를 '미확인'으로 되돌린다."""
+    with _conn() as con:
+        r = con.execute("SELECT analysis_id FROM pledges WHERE id=?", (pledge_id,)).fetchone()
+        if r is None:
+            return
+        con.execute("UPDATE pledges SET 삭제여부=1, 삭제자=?, 삭제일시=? WHERE id=?", (who, _now(), pledge_id))
+        left = con.execute("SELECT COUNT(*) FROM pledges WHERE analysis_id=? AND COALESCE(삭제여부,0)=0",
+                           (r["analysis_id"],)).fetchone()[0]
+        if not left:
+            con.execute("UPDATE analyses SET 보안서약서='미확인' WHERE id=? AND 보안서약서='예'", (r["analysis_id"],))
 
 
 def log_report(analysis_id, who, fmt, filename):
@@ -167,9 +303,12 @@ def list_reports(analysis_id):
 def list_analyses(include_deleted=False):
     """게시판 목록. 타임라인 JSON 은 읽지 않는다 (REQ-06)."""
     where = "" if include_deleted else "WHERE COALESCE(삭제여부, 0) = 0"
+    pledge_count = ("(SELECT COUNT(*) FROM pledges p WHERE p.analysis_id = analyses.id "
+                    "AND COALESCE(p.삭제여부, 0) = 0) AS 서약서수")
     with _conn() as con:
-        rows = con.execute(f"SELECT {', '.join(LIST_COLUMNS)} FROM analyses {where} ORDER BY id DESC").fetchall()
-    df = pd.DataFrame([dict(r) for r in rows], columns=LIST_COLUMNS)
+        rows = con.execute(f"SELECT {', '.join(LIST_COLUMNS)}, {pledge_count} FROM analyses {where} "
+                           "ORDER BY id DESC").fetchall()
+    df = pd.DataFrame([dict(r) for r in rows], columns=LIST_COLUMNS + ["서약서수"])
     df["테스트여부"] = df["테스트여부"].fillna(0).astype(int)
     df["최고등급"] = df["최고등급"].fillna("")
     return df
@@ -191,6 +330,8 @@ def get_analysis(analysis_id):
         d[k] = d.get(k) or ""
     d["테스트여부"] = int(d.get("테스트여부") or 0)
     d["삭제여부"] = int(d.get("삭제여부") or 0)
+    d["서약서"] = current_pledge(analysis_id)              # REQ-12 현재본 (없으면 None)
+    d["서약서수"] = 0 if d["서약서"] is None else len(list_pledges(analysis_id))
     if "시간" in tl:
         tl["시간"] = pd.to_datetime(tl["시간"], errors="coerce")
     d["타임라인"] = tl

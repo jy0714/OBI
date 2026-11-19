@@ -21,3 +21,9 @@ def rendered(sample):
     out = harness.render(sample)
     harness.save(out, harness.OUT_DIR)      # 실패 시 tests/_out/ 에서 전체 결과 확인
     return out
+
+
+@pytest.fixture(autouse=True)
+def _temp_files_dir(tmp_path, monkeypatch):
+    """서약서 저장 폴더는 항상 임시 폴더 (실제 ./data/pledges 를 건드리지 않음)"""
+    monkeypatch.setenv("OBI_FILES_DIR", str(tmp_path / "pledges"))

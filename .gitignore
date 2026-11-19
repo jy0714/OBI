@@ -1,5 +1,6 @@
-# 분석 이력 DB / 개인정보 포함 데이터
+# 분석 이력 DB / 개인정보 포함 데이터 (보안서약서 PDF 기본 저장 위치 data/pledges/ 포함)
 data/
+data/pledges/
 *.db
 *.db-journal
 *.db-wal

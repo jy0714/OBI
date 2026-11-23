@@ -23,15 +23,24 @@ def _date_x():
     return alt.X("yearmonthdate(날짜):T", title=None, axis=alt.Axis(format="%m-%d", labelAngle=0, grid=False))
 
 
-def daily_activity(d, height=300):
+PICK = "pick"      # 일자별 활동 막대 선택 이름 (REQ-16). 선택값은 {"일자": "YYYY-MM-DD", "채널": ...}
+
+
+def daily_activity(d, height=300, selectable=False):
     """일자별 활동: 채널별 누적 막대 + 확인 필요 점 + 최근 시작·기준일·퇴직일 세로선 (한 축: 건수)
-    확인 필요는 선으로 잇지 않는다 — 활동 없는 날을 건너뛰어 이으면 그 사이에도 행위가 있었던 것처럼 보인다."""
+    확인 필요는 선으로 잇지 않는다 — 활동 없는 날을 건너뛰어 이으면 그 사이에도 행위가 있었던 것처럼 보인다.
+    selectable: 막대를 누르면 그 날짜·채널을 고른다 (REQ-16). '일자'는 날짜를 문자열 그대로 돌려받기 위한 사본
+    (시간축에 쓰는 '날짜'는 Vega-Lite 가 날짜값으로 바꿔 버린다)."""
     daily = d["daily"].groupby(["날짜", "채널"], as_index=False)["건수"].sum()
+    daily["일자"] = daily["날짜"]
     # 6개월 시간축에서는 막대 폭이 몇 px 라 테두리(간격)를 넣으면 막대가 지워진다
     bars = alt.Chart(daily).mark_bar(cornerRadiusTopLeft=1, cornerRadiusTopRight=1).encode(
-        x=_date_x(), y=alt.Y("sum(건수):Q", title="건수", axis=alt.Axis(gridOpacity=0.4)),
+        x=_date_x(), y=alt.Y("건수:Q", stack="zero", title="건수", axis=alt.Axis(gridOpacity=0.4)),
         color=_channel_color(), order=alt.Order("채널:N"),
-        tooltip=[alt.Tooltip("날짜:N"), "채널:N", alt.Tooltip("sum(건수):Q", title="건수")])
+        tooltip=[alt.Tooltip("일자:N", title="날짜"), "채널:N", alt.Tooltip("건수:Q", title="건수")])
+    if selectable:
+        pick = alt.selection_point(name=PICK, fields=["일자", "채널"], on="click", clear="dblclick")
+        bars = bars.add_params(pick).encode(opacity=alt.condition(pick, alt.value(1), alt.value(0.35)))
     need = alt.Chart(d["need"][d["need"]["확인필요"] > 0]).mark_point(
         color=NEED_COLOR, size=70, filled=True, opacity=1, stroke="white", strokeWidth=2).encode(
         x=_date_x(), y="확인필요:Q",

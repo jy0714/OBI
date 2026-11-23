@@ -303,3 +303,47 @@ def test_req17_tables_hide_event_id_but_open_raw_log(temp_db, sample):
         assert "이벤트ID" not in raw.columns and "원본시트" in raw.columns
         assert raw["원본행"].tolist() == want["원본행"].tolist()
         at.session_state[key] = {"selection": {"rows": [], "columns": [], "cells": []}}
+
+
+def test_req16_dashboard_item_filter(temp_db, sample):
+    """채널 하나만 고르면 표 건수 = 타임라인 해당 채널 건수 / 없는 조합은 빈 상태 문구 / 막대 클릭 → 그 날짜·채널"""
+    import obi_pipeline as pipeline
+    tl = sample["tl"]
+    aid = pipeline.save(sample["result"])
+    at = app()
+    at.session_state["current_id"] = aid
+    at.run()
+    n_tables = len(at.dataframe)
+    at.multiselect(key="new_dash_ch").set_value(["USB"]).run()
+    assert not at.exception, at.exception
+    n = int((tl["채널"] == "USB").sum())
+    assert any(m.value == f"**전체 기간** · USB 이벤트 {n}건" for m in at.markdown)
+    assert len(at.dataframe) == n_tables + 1
+    assert any(len(d.value) == n and set(d.value["채널"]) == {"USB"} for d in at.dataframe)
+
+    # 막대 클릭 (선택 상태를 직접 넣음)
+    at.multiselect(key="new_dash_ch").set_value([])
+    d = sample["dashboard"]
+    day = d["dates"][0]
+    ch = d["daily"][d["daily"]["날짜"] == day]["채널"].iloc[0]
+    at.session_state["new_dash_chart"] = {"selection": {"pick": [{"일자": day, "채널": ch}]}}
+    at.run()
+    assert not at.exception, at.exception
+    want = len(pipeline.events_on(tl, day, [ch]))
+    assert any(m.value == f"**{day} · {ch}** · 이벤트 {want}건" for m in at.markdown)
+
+
+def test_req16_dashboard_empty_item(temp_db, sample):
+    """확인 필요가 없는 채널 + '확인 필요만' → 오류 없이 빈 상태 문구"""
+    r = dict(sample["result"])
+    tl = r["timeline"].copy()
+    tl.loc[tl["채널"] == "웹", "점검결과"] = ""
+    aid = store.save_analysis(r["info"], r["checks"], r["summary"], tl, r["criteria"])
+    at = app()
+    at.session_state["current_id"] = aid
+    at.run()
+    at.multiselect(key="new_dash_ch").set_value(["웹"])
+    at.toggle(key="new_dash_need").set_value(True).run()
+    assert not at.exception, at.exception
+    assert any("고른 항목의 이벤트가 없습니다" in i.value for i in at.info)
+    assert any("해당하는 이벤트가 없습니다" in c.value for c in at.caption)

@@ -373,3 +373,45 @@ def test_req14_rank_hidden_but_legacy_export_kept(tmp_path, monkeypatch, sample)
     legacy = store.to_legacy_frame(store.list_analyses())                       # 기존 양식은 그대로
     assert list(legacy.columns)[:len(store.LEGACY_COLUMNS)] == store.LEGACY_COLUMNS
     assert legacy["직급"].tolist() == ["선임"]
+
+
+# --- REQ-16 일자별 활동을 항목별로 걸러 보기 -----------------------------------------
+def test_req16_channel_filter_matches_timeline(sample):
+    import obi_pipeline as p
+    tl, a = sample["tl"], sample["analysis"]
+    full = p.dashboard(tl, a["채널요약"], a["기준일"], a["퇴직일자"])
+    for ch in tl["채널"].dropna().unique():
+        d = p.dashboard(tl, a["채널요약"], a["기준일"], a["퇴직일자"], channels=[ch])
+        timed = tl[(tl["채널"] == ch) & tl["시간"].notna()]
+        assert set(d["daily"]["채널"]) == {ch}
+        assert d["daily"]["건수"].sum() == len(timed)
+        assert set(d["bytes"]["채널"]) <= {ch}
+        assert len(p.events_on(tl, channels=[ch])) == int((tl["채널"] == ch).sum())      # 표 건수 = 타임라인 건수
+        assert d["compare"].equals(full["compare"]) and d["offhours"].equals(full["offhours"])   # 전체 기준 유지
+    need = p.dashboard(tl, channels=None, need_only=True)
+    assert set(need["daily"]["구분"]) == {"확인 필요"}
+    assert need["daily"]["건수"].sum() == int(((tl["점검결과"] == "확인 필요") & tl["시간"].notna()).sum())
+    assert len(p.events_on(tl, need_only=True)) == int((tl["점검결과"] == "확인 필요").sum())
+    # 날짜 + 채널
+    day = full["dates"][0]
+    ch = full["daily"][full["daily"]["날짜"] == day]["채널"].iloc[0]
+    want = full["daily"][(full["daily"]["날짜"] == day) & (full["daily"]["채널"] == ch)]["건수"].sum()
+    assert len(p.events_on(tl, day, [ch])) == want
+    assert p.dashboard(tl).keys() == full.keys() and p.events_on(tl).equals(tl)      # 필터 없음 = 기존과 같음
+
+
+def test_req16_empty_selection():
+    import pandas as pd
+    import obi_pipeline as p
+    tl = pd.DataFrame({"이벤트ID": ["E1"], "시간": pd.to_datetime(["2026-09-01 10:00"]), "채널": ["웹"],
+                       "점검결과": [""], "업무시간외": [""], "용량_bytes": [None], "행위": ["접속"]})
+    d = p.dashboard(tl, need_only=True)
+    assert d["daily"].empty and d["bytes"].empty and d["dates"] == []
+    assert p.events_on(tl, channels=["USB"]).empty and p.events_on(tl, "2026-09-02").empty
+
+
+def test_req16_chart_selectable(sample):
+    import obi_charts as c
+    spec = c.daily_activity(sample["dashboard"], selectable=True).to_dict()
+    assert c.PICK in str(spec) and "일자" in str(spec)
+    assert "'name': 'pick'" not in str(c.daily_activity(sample["dashboard"]).to_dict())   # 기본은 선택 없음

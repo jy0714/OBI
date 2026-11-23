@@ -169,43 +169,91 @@ def selectable_table(df, tl, key, ids_col, view, caption="행을 누르면 원�
         st.caption(caption)
 
 
+def _picked_bar(event):
+    """일자별 활동 막대 클릭 → (날짜, 채널) 또는 None (REQ-16)"""
+    try:
+        pts = event["selection"][charts.PICK]
+    except (KeyError, TypeError):
+        return None
+    if isinstance(pts, dict):        # 버전에 따라 {"일자": [...], "채널": [...]} 형태
+        pts = [dict(zip(pts, vals)) for vals in zip(*pts.values())] if pts else []
+    p = pts[0] if pts else {}
+    day, ch = p.get("일자"), p.get("채널")
+    if isinstance(day, list):
+        day = day[0] if day else None
+    if isinstance(ch, list):
+        ch = ch[0] if ch else None
+    return (str(day), str(ch)) if day and ch else None
+
+
 def render_dashboard(tl, a, key):
-    """REQ-02 채널·추이 대시보드 (집계는 pipeline.dashboard, 차트는 obi_charts)"""
-    d = pipeline.dashboard(tl, a["채널요약"], a["기준일"], a["퇴직일자"])
-    if d["daily"].empty:
+    """REQ-02 채널·추이 대시보드 (집계는 pipeline.dashboard, 차트는 obi_charts)
+    REQ-16: 항목(채널 + 확인 필요만)을 고르면 일자별 활동·전송 용량·이벤트 표가 함께 바뀐다."""
+    full = pipeline.dashboard(tl, a["채널요약"], a["기준일"], a["퇴직일자"])
+    if full["daily"].empty:
         st.info("시간이 기록된 이벤트가 없어 표시할 추이가 없습니다.")
         return
 
     st.markdown("##### 일자별 활동")
-    st.altair_chart(charts.daily_activity(d), width="stretch")
-    st.caption("막대: 채널별 건수 · 빨간 점: 그날의 확인 필요 건수 · 점선: "
-               + " / ".join(f"{r.이름} {r.날짜}" for r in d["markers"].itertuples()))
+    present = set(tl["채널"].dropna())
+    channels = [c for c in charts.CHANNEL_ORDER if c in present] + sorted(present - set(charts.CHANNEL_ORDER))
+    f1, f2 = st.columns([4, 1])
+    sel = f1.multiselect("항목", channels, default=channels, key=f"{key}_dash_ch",
+                         help="고른 채널만 차트와 아래 표에 나옵니다. 모두 지우면 전체 채널입니다.")
+    need_only = f2.toggle("확인 필요만", key=f"{key}_dash_need")
+    picked_ch = None if set(sel) in (set(), set(channels)) else sel        # None = 전체 채널
+    filtered = picked_ch is not None or need_only
+    d = pipeline.dashboard(tl, a["채널요약"], a["기준일"], a["퇴직일자"], picked_ch, need_only) if filtered else full
+
+    bar = None
+    if d["daily"].empty:
+        st.info("고른 항목의 이벤트가 없습니다. 항목을 바꿔 보세요.")
+    else:
+        ev = st.altair_chart(charts.daily_activity(d, selectable=True), width="stretch",
+                             on_select="rerun", selection_mode=charts.PICK, key=f"{key}_dash_chart")
+        bar = _picked_bar(ev)
+        st.caption("막대: 채널별 건수 (누르면 그 날짜·채널의 이벤트, 두 번 누르면 해제) · 빨간 점: 그날의 확인 필요 건수 · 점선: "
+                   + " / ".join(f"{r.이름} {r.날짜}" for r in d["markers"].itertuples()))
 
     c1, c2, c3 = st.columns(3)
     with c1:
         st.markdown("###### 평소 대비 최근 (30일 환산 건수)")
-        if d["compare"].empty:
+        if full["compare"].empty:
             st.caption("채널 요약이 없습니다.")
         else:
-            st.altair_chart(charts.recent_vs_usual(d), width="stretch")
+            st.altair_chart(charts.recent_vs_usual(full), width="stretch")
     with c2:
         st.markdown("###### 업무시간 외 비중 (%)")
-        st.altair_chart(charts.off_hours_share(d), width="stretch")
+        st.altair_chart(charts.off_hours_share(full), width="stretch")
     with c3:
-        st.markdown("###### 일자별 전송 용량 (MB)")
+        st.markdown("###### 일자별 전송 용량 (MB)" + (" · 고른 항목" if filtered else ""))
         if d["bytes"].empty:
             st.caption("전송 용량 기록이 없습니다.")
         else:
             st.altair_chart(charts.daily_bytes(d), width="stretch")
 
-    # 날짜를 고르면 그날의 이벤트 (REQ-09)
+    # 막대 클릭 > 날짜 선택 > 항목만 고름 순서로 아래 표를 정한다 (REQ-09·16)
     counts = d["daily"].groupby("날짜")["건수"].sum()
     needs = d["need"].set_index("날짜")["확인필요"]
     day = st.selectbox("날짜를 고르면 그날의 이벤트가 나옵니다", [None] + d["dates"], key=f"{key}_day",
                        format_func=lambda x: "날짜 선택" if x is None else
                        f"{x} · {counts.get(x, 0)}건" + (f" (확인 필요 {needs.get(x, 0)})" if needs.get(x, 0) else ""))
-    if day:
-        raw_log(pipeline.events_on(tl, day))
+    if bar:
+        events, title = pipeline.events_on(tl, bar[0], [bar[1]], need_only), f"{bar[0]} · {bar[1]}"
+    elif day:
+        events, title = pipeline.events_on(tl, day, picked_ch, need_only), day
+    elif filtered:
+        events, title = pipeline.events_on(tl, None, picked_ch, need_only), "전체 기간"
+    else:
+        events = None
+    if events is not None:
+        what = [", ".join(picked_ch)] if picked_ch and not bar else []
+        what += ["확인 필요"] if need_only else []
+        st.markdown(f"**{title}** · " + " ".join(what + [f"이벤트 {len(events)}건"]))
+        if events.empty:
+            st.caption("해당하는 이벤트가 없습니다.")
+        else:
+            raw_log(events)
     with st.expander("채널 요약 표"):
         st.dataframe(a["채널요약"], hide_index=True, width="stretch")
         st.caption("평소 기간은 약 5개월이라 30일 평균으로 맞춰 최근 30일과 비교합니다. 건수가 적으면 차이가 과장될 수 있습니다.")

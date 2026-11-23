@@ -271,8 +271,11 @@ def save(result, *, test=False, sources=None):
                                cand_count=n_cands)
 
 
-def dashboard(tl, summary=None, base_date="", retire_date=""):
+def dashboard(tl, summary=None, base_date="", retire_date="", channels=None, need_only=False):
     """REQ-02 채널·추이 대시보드 집계. 화면(Altair)은 이 값만 그린다.
+
+    channels·need_only (REQ-16): 고른 항목만 daily·need·bytes·dates 에 반영한다.
+    평소 대비 최근(compare)·업무시간 외(offhours)는 전체 기준 그대로.
 
     돌려주는 dict:
       daily     날짜·채널·구분(확인 필요/일반)·건수  — 채널별 누적 막대
@@ -295,12 +298,16 @@ def dashboard(tl, summary=None, base_date="", retire_date=""):
     t["날짜"] = t["시간"].dt.strftime("%Y-%m-%d")
     t["구분"] = t["점검결과"].fillna("").map(lambda x: "확인 필요" if x == "확인 필요" else "일반")
 
-    daily = t.groupby(["날짜", "채널", "구분"]).size().reset_index(name="건수")
-    need = (t[t["구분"] == "확인 필요"].groupby("날짜").size().reindex(sorted(t["날짜"].unique()), fill_value=0)
-            .rename("확인필요").reset_index())
-    sent = crit.transfer_bytes(t)
-    b = t.assign(MB=sent / crit.MB)[sent > 0]
-    by = b.groupby(["날짜", "채널"])["MB"].sum().round(1).reset_index()
+    f = filter_events(t, channels, need_only)
+    if f.empty:
+        daily, need, by = empty["daily"], empty["need"], empty["bytes"]
+    else:
+        daily = f.groupby(["날짜", "채널", "구분"]).size().reset_index(name="건수")
+        need = (f[f["구분"] == "확인 필요"].groupby("날짜").size().reindex(sorted(f["날짜"].unique()), fill_value=0)
+                .rename("확인필요").reset_index())
+        sent = crit.transfer_bytes(f)
+        b = f.assign(MB=sent / crit.MB)[sent > 0]
+        by = b.groupby(["날짜", "채널"])["MB"].sum().round(1).reset_index() if len(b) else empty["bytes"]
 
     compare = empty["compare"]
     if summary is not None and len(summary) and {"평소_30일환산", "최근_30일환산"} <= set(summary.columns):
@@ -321,14 +328,29 @@ def dashboard(tl, summary=None, base_date="", retire_date=""):
         marks.append(("퇴직일", retire.strftime("%Y-%m-%d")))
     return dict(daily=daily, need=need, bytes=by, compare=compare, offhours=off,
                 markers=pd.DataFrame(marks, columns=["이름", "날짜"]),
-                dates=sorted(t["날짜"].unique(), reverse=True))
+                dates=sorted(f["날짜"].unique(), reverse=True))
 
 
-def events_on(tl, day):
-    """'YYYY-MM-DD' 그날의 이벤트"""
-    if tl.empty or "시간" not in tl:
+def filter_events(tl, channels=None, need_only=False):
+    """REQ-16 항목 필터: channels(None·빈 목록 = 전체 채널), need_only = 점검결과 '확인 필요'만"""
+    v = tl
+    if channels and "채널" in v:
+        v = v[v["채널"].isin(list(channels))]
+    if need_only:
+        v = v[v["점검결과"].fillna("") == "확인 필요"] if "점검결과" in v else v.iloc[0:0]
+    return v
+
+
+def events_on(tl, day=None, channels=None, need_only=False):
+    """REQ-02·16 대시보드 아래 이벤트 표: 'YYYY-MM-DD' 그날(None = 전체 기간) + 항목 필터"""
+    if tl.empty:
         return tl
-    return tl[tl["시간"].dt.strftime("%Y-%m-%d") == day]
+    v = filter_events(tl, channels, need_only)
+    if day:
+        if "시간" not in v:
+            return v.iloc[0:0]
+        v = v[v["시간"].dt.strftime("%Y-%m-%d") == day]
+    return v
 
 
 def derive(tl):

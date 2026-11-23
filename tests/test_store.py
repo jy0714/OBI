@@ -64,7 +64,7 @@ def test_ai_opinion_keeps_previous_times(db, sample):
     aid = pipeline.save(sample["result"])
     store.save_ai_opinion(aid, "첫 의견", "ollama", "m1", "u")
     first = store.get_analysis(aid)["AI생성일시"]
-    store.save_ai_opinion(aid, "두 번째", "anthropic", "m2", "u2")
+    store.save_ai_opinion(aid, "두 번째", "openai", "m2", "u2")
     a = store.get_analysis(aid)
     assert a["AI의견"] == "두 번째" and a["AI모델"] == "m2" and a["AI요청자"] == "u2"
     assert a["AI이전생성일시"] == [first]

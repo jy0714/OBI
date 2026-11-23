@@ -6,6 +6,7 @@ OBI (Offboarding Inspector) 화면 - 1차 버전 (AI 분석 연동 전)
 import io
 import os
 import tempfile
+import time
 from datetime import date
 
 import pandas as pd
@@ -13,6 +14,7 @@ import streamlit as st
 
 import obi_ai as ai
 import obi_charts as charts
+import obi_config as config
 import obi_pipeline as pipeline
 import obi_report as report
 import obi_store as store
@@ -116,27 +118,24 @@ def run_analysis(xls, info, base_date, test=False, sources=None):
 # ---------------------------------------------------------------------------
 # AI 프로바이더 설정 읽기
 # ---------------------------------------------------------------------------
+OLLAMA_LABEL, OPENAI_LABEL = "Ollama (로컬)", "OpenAI 형식 API"
+
+
 def _ai_cfg():
-    p = st.session_state.get("ai_provider", "Ollama (로컬)")
-    if p == "Ollama (로컬)":
-        return {
-            "provider": "ollama",
-            "model":    st.session_state.get("ollama_model",    ai.PROVIDER_DEFAULTS["ollama"]["model"]),
-            "base_url": st.session_state.get("ollama_base_url", ai.PROVIDER_DEFAULTS["ollama"]["base_url"]),
-            "api_key":  "",
-        }
-    if p == "OpenAI 호환":
+    """사이드바 선택 + obi.ini 값 → stream_analyze 용 cfg. 고를 모델이 없으면 model = "" """
+    conf = st.session_state.get("obi_conf") or config.load()
+    if st.session_state.get("ai_provider", OLLAMA_LABEL) == OPENAI_LABEL:
         return {
             "provider": "openai",
-            "model":    st.session_state.get("openai_model",    ai.PROVIDER_DEFAULTS["openai"]["model"]),
-            "base_url": st.session_state.get("openai_base_url", ai.PROVIDER_DEFAULTS["openai"]["base_url"]),
-            "api_key":  st.session_state.get("openai_api_key", ""),
+            "model":    (st.session_state.get("openai_model") or conf["openai_model"]).strip(),
+            "base_url": (st.session_state.get("openai_base_url") or conf["openai_base_url"]).strip(),
+            "api_key":  (st.session_state.get("openai_api_key") or conf["openai_api_key"]).strip(),
         }
     return {
-        "provider": "anthropic",
-        "model":    st.session_state.get("anthropic_model",   ai.PROVIDER_DEFAULTS["anthropic"]["model"]),
-        "base_url": ai.PROVIDER_DEFAULTS["anthropic"]["base_url"],
-        "api_key":  st.session_state.get("anthropic_api_key", ""),
+        "provider": "ollama",
+        "model":    st.session_state.get("ollama_model") or "",
+        "base_url": conf["ollama_base_url"],
+        "api_key":  "",
     }
 
 
@@ -390,17 +389,17 @@ def render_detail(analysis_id, key):
     with t_llm:
         # AI 의견은 DB 에 저장 → 브라우저를 새로 열어도 보인다 (REQ-07)
         cfg = _ai_cfg()
-        provider_label = st.session_state.get("ai_provider", "Ollama (로컬)")
+        provider_label = st.session_state.get("ai_provider", OLLAMA_LABEL)
 
         h1, h2 = st.columns([5, 1])
-        h1.markdown(f"##### AI 분석 &nbsp;&nbsp; **{provider_label}** · `{cfg['model']}`")
+        h1.markdown(f"##### AI 분석 &nbsp;&nbsp; **{provider_label}** · `{cfg['model'] or '모델 없음'}`")
 
         with st.expander("LLM에 전달되는 프롬프트 확인"):
             st.code(ai.build_llm_prompt(a, crit, cands, tl), language="text")
 
         existing = a["AI의견"]
         clicked = h2.button("다시 요청" if existing else "분석 요청", key=f"{key}_llm_run",
-                            type="secondary" if existing else "primary")
+                            type="secondary" if existing else "primary", disabled=not cfg["model"])
         if clicked:
             try:
                 result = st.write_stream(ai.stream_analyze(cfg, a, crit, cands, tl))
@@ -415,7 +414,9 @@ def render_detail(analysis_id, key):
             st.caption(f"{a['AI프로바이더']} · `{a['AI모델']}` · 생성 {a['AI생성일시']} · 요청 {a['AI요청자'] or '-'}"
                        + (f" · 이전 생성: {', '.join(a['AI이전생성일시'])}" if a["AI이전생성일시"] else ""))
             st.markdown(existing)
-        else:
+        if not cfg["model"]:
+            st.warning("선택할 수 있는 AI 모델이 없습니다. 왼쪽 사이드바의 AI 분석 설정을 확인하세요.")
+        elif not existing:
             st.info(
                 f"**{provider_label}** / `{cfg['model']}` 에게 이 분석 결과를 전달하여 AI 의견을 받습니다.  \n"
                 "왼쪽 사이드바에서 분석 엔진과 모델을 설정한 뒤 **분석 요청** 버튼을 누르세요. 받은 의견은 이력에 저장됩니다."
@@ -586,6 +587,46 @@ def page_history():
         st.caption("게시판의 행을 누르면 이 아래에 분석 상세가 열립니다.")
 
 
+# ---------------------------------------------------------------------------
+# 접속 인증 — obi.ini [auth] password (4자리 숫자) 를 맞혀야 메인 화면이 열린다
+# ---------------------------------------------------------------------------
+LOGIN_MAX_FAILS, LOGIN_LOCK_SECONDS = 5, 30
+
+
+def login_gate():
+    conf = config.load()
+    st.session_state["obi_conf"] = conf
+    if st.session_state.get("obi_authed") and not conf["오류"]:
+        return
+    _, mid, _ = st.columns([1, 1.2, 1])
+    with mid:
+        st.markdown('<div class="obi-side" style="padding-top:12vh"><div class="l">OBI</div>'
+                    '<div class="s">OFFBOARDING INSPECTOR</div></div>', unsafe_allow_html=True)
+        if conf["오류"]:
+            st.error(conf["오류"])
+            st.stop()
+        locked = st.session_state.get("login_locked_until", 0) - time.time()
+        with st.form("login"):
+            pw = st.text_input("비밀번호 (숫자 4자리)", type="password", max_chars=4, key="login_pw")
+            ok = st.form_submit_button("확인", type="primary", width="stretch")
+        if locked > 0:
+            st.error(f"비밀번호를 {LOGIN_MAX_FAILS}번 틀렸습니다. {int(locked) + 1}초 뒤에 다시 시도하세요.")
+        elif ok:
+            if config.check_password(conf, pw):
+                st.session_state["obi_authed"] = True
+                st.session_state.pop("login_fails", None)
+                st.rerun()
+            fails = st.session_state.get("login_fails", 0) + 1
+            st.session_state["login_fails"] = fails
+            if fails >= LOGIN_MAX_FAILS:
+                st.session_state["login_fails"] = 0
+                st.session_state["login_locked_until"] = time.time() + LOGIN_LOCK_SECONDS
+            st.error("비밀번호가 맞지 않습니다.")
+    st.stop()
+
+
+login_gate()
+
 with st.sidebar:
     st.markdown('<div class="obi-side"><div class="l">OBI</div>'
                 '<div class="s">OFFBOARDING INSPECTOR</div></div>', unsafe_allow_html=True)
@@ -593,26 +634,35 @@ with st.sidebar:
     st.session_state["user"] = st.text_input("사용자 이름", value=st.session_state.get("user", ""))
     st.divider()
     st.markdown("**AI 분석 설정**")
-    ai_provider = st.selectbox(
-        "분석 엔진", ["Ollama (로컬)", "OpenAI 호환", "Anthropic"],
-        key="ai_provider",
-    )
-    if ai_provider == "Ollama (로컬)":
-        st.text_input("서버 URL", key="ollama_base_url",
-                      value=st.session_state.get("ollama_base_url", ai.PROVIDER_DEFAULTS["ollama"]["base_url"]))
-        st.text_input("모델명", key="ollama_model",
-                      value=st.session_state.get("ollama_model", ai.PROVIDER_DEFAULTS["ollama"]["model"]))
-    elif ai_provider == "OpenAI 호환":
+    conf = st.session_state["obi_conf"]
+    ai_provider = st.selectbox("분석 엔진", [OLLAMA_LABEL, OPENAI_LABEL], key="ai_provider")
+    if ai_provider == OLLAMA_LABEL:
+        try:
+            models = ai.list_ollama_models(conf["ollama_base_url"], conf["ollama_models"])
+        except ConnectionError as e:
+            models = []
+            st.warning(str(e))
+        else:
+            if not models:
+                want = ", ".join(conf["ollama_models"]) or "(전체)"
+                st.warning(f"`ollama list` 에 사용할 수 있는 모델이 없습니다. 허용 모델: {want}  \n"
+                           f"`ollama pull <모델명>` 으로 받은 뒤 새로고침하세요.")
+        if models:
+            st.selectbox("모델", models, key="ollama_model", help="`ollama list` 에 있는 모델 중 obi.ini 에서 허용한 것만 보입니다.")
+        else:
+            st.session_state.pop("ollama_model", None)
+        st.button("모델 목록 새로고침", key="ollama_refresh")
+    else:
         st.text_input("API 엔드포인트", key="openai_base_url",
-                      value=st.session_state.get("openai_base_url", ai.PROVIDER_DEFAULTS["openai"]["base_url"]))
-        st.text_input("API 키", key="openai_api_key", type="password")
+                      value=st.session_state.get("openai_base_url", conf["openai_base_url"]))
+        st.text_input("API 키", key="openai_api_key", type="password",
+                      placeholder="obi.ini 의 키 사용" if conf["openai_api_key"] else "")
         st.text_input("모델명", key="openai_model",
-                      value=st.session_state.get("openai_model", ai.PROVIDER_DEFAULTS["openai"]["model"]))
-    else:  # Anthropic
-        st.text_input("API 키", key="anthropic_api_key", type="password")
-        st.text_input("모델명", key="anthropic_model",
-                      value=st.session_state.get("anthropic_model", ai.PROVIDER_DEFAULTS["anthropic"]["model"]))
+                      value=st.session_state.get("openai_model", conf["openai_model"]))
     st.divider()
+    if st.button("잠금 (로그아웃)", key="logout"):
+        st.session_state.pop("obi_authed", None)
+        st.rerun()
     st.caption(f"이력 저장 위치\n\n`{store.DB_PATH}`\n\n서약서 저장 위치\n\n`{store.files_dir()}`")
 
 if menu == "새 분석":

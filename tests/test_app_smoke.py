@@ -10,6 +10,21 @@ import obi_store as store
 APP = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "app.py")
 
 
+def app(authed=True):
+    """메인 화면 테스트는 로그인된 세션으로 시작한다 (로그인 자체는 test_login_* 에서)"""
+    at = AppTest.from_file(APP, default_timeout=60)
+    if authed:
+        at.session_state["obi_authed"] = True
+    return at
+
+
+@pytest.fixture(autouse=True)
+def fake_ollama(monkeypatch):
+    """`ollama list` 대신 고정 목록 (네트워크 없음)"""
+    import obi_ai
+    monkeypatch.setattr(obi_ai, "list_ollama_models", lambda base, allowed=(), timeout=3: ["gemma4:31b"])
+
+
 @pytest.fixture
 def temp_db(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "DB_PATH", str(tmp_path / "app.db"))
@@ -17,16 +32,56 @@ def temp_db(tmp_path, monkeypatch):
     return store.DB_PATH
 
 
+def test_login_required_before_main(temp_db):
+    at = app(authed=False).run()
+    assert not at.exception, at.exception
+    assert not at.sidebar.radio and "분석 실행" not in [b.label for b in at.button]   # 메인 화면 안 보임
+    at.text_input(key="login_pw").set_value("0000")
+    at.button(key="FormSubmitter:login-확인").click().run()
+    assert any("맞지 않습니다" in e.value for e in at.error) and not at.sidebar.radio
+    at.text_input(key="login_pw").set_value("1234")
+    at.button(key="FormSubmitter:login-확인").click().run()
+    assert not at.exception, at.exception
+    assert at.sidebar.radio and "분석 실행" in [b.label for b in at.button]
+
+
+def test_login_locks_after_repeated_failures(temp_db):
+    at = app(authed=False).run()
+    for _ in range(5):
+        at.text_input(key="login_pw").set_value("9999")
+        at.button(key="FormSubmitter:login-확인").click().run()
+    at.text_input(key="login_pw").set_value("1234")
+    at.button(key="FormSubmitter:login-확인").click().run()
+    assert any("초 뒤에" in e.value for e in at.error) and not at.sidebar.radio
+
+
+@pytest.mark.parametrize("ini", [None, "[auth]|password = 12a4", "[auth]|password ="])
+def test_login_fails_closed_on_bad_config(temp_db, _temp_config, ini):
+    if ini is None:
+        _temp_config.unlink()
+    else:
+        _temp_config.write_text(ini.replace("|", "\n"),encoding="utf-8")
+    at = app().run()                                    # 이미 로그인된 세션이어도 막힘
+    assert not at.exception, at.exception
+    assert at.error and not at.sidebar.radio
+
+
+def test_ai_engines_and_ollama_models(temp_db):
+    at = app().run()
+    assert at.sidebar.selectbox(key="ai_provider").options == ["Ollama (로컬)", "OpenAI 형식 API"]
+    assert at.sidebar.selectbox(key="ollama_model").options == ["gemma4:31b"]
+
+
 def test_new_page_renders_empty(temp_db):
-    at = AppTest.from_file(APP, default_timeout=60).run()
+    at = app().run()
     assert not at.exception
-    assert [b.label for b in at.button] == ["분석 실행"]
+    assert [b.label for b in at.main.button] == ["분석 실행"]
 
 
 def test_detail_renders_sample(temp_db, sample):
     r = sample["result"]
     aid = store.save_analysis(r["info"], r["checks"], r["summary"], r["timeline"], r["criteria"])
-    at = AppTest.from_file(APP, default_timeout=60)
+    at = app()
     at.session_state["current_id"] = aid
     at.run()
     assert not at.exception, at.exception
@@ -50,7 +105,7 @@ def test_detail_renders_sample(temp_db, sample):
 def test_history_page_renders(temp_db, sample):
     r = sample["result"]
     store.save_analysis(r["info"], r["checks"], r["summary"], r["timeline"], r["criteria"])
-    at = AppTest.from_file(APP, default_timeout=60).run()
+    at = app().run()
     at.sidebar.radio[0].set_value("이력 조회").run()
     assert not at.exception, at.exception
 
@@ -59,7 +114,7 @@ def test_req08_review_form_blocks_missing(temp_db, sample):
     """정식 이력: 필수값 없이 저장 안 됨 / Test 이력: 경고 없음"""
     import obi_pipeline as pipeline
     aid = pipeline.save(sample["result"])
-    at = AppTest.from_file(APP, default_timeout=60)
+    at = app()
     at.session_state["current_id"] = aid
     at.run()
     assert any("입력 필요" in w.value for w in at.warning)
@@ -68,7 +123,7 @@ def test_req08_review_form_blocks_missing(temp_db, sample):
     assert store.get_analysis(aid)["검토일시"] == ""
 
     tid = pipeline.save(sample["result"], test=True)
-    at2 = AppTest.from_file(APP, default_timeout=60)
+    at2 = app()
     at2.session_state["current_id"] = tid
     at2.run()
     assert not any("입력 필요" in w.value for w in at2.warning)
@@ -78,7 +133,7 @@ def test_req09_board_row_opens_detail_below(temp_db, sample):
     """게시판 행 선택 → 게시판은 그대로 두고 아래에 상세. 선택 해제 → 상세 닫힘"""
     import obi_pipeline as pipeline
     aid = pipeline.save(sample["result"])
-    at = AppTest.from_file(APP, default_timeout=60).run()
+    at = app().run()
     at.sidebar.radio[0].set_value("이력 조회").run()
     assert not at.exception
     assert not any(m.label == "최고 등급" for m in at.metric)                       # 선택 전: 상세 없음
@@ -100,7 +155,7 @@ def test_req10_upload_prefills_and_user_edit_wins(temp_db, tmp_path):
     import sample_ddi
     data = open(sample_ddi.build(str(tmp_path / "s.xlsx")), "rb").read()
     xmime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    at = AppTest.from_file(APP, default_timeout=60).run()
+    at = app().run()
     at.file_uploader(key="upload_file").set_value(("로그.xlsx", data, xmime)).run()
     assert not at.exception, at.exception
     assert at.text_input(key="f_name").value == "홍길동"
@@ -122,7 +177,7 @@ def test_req10_upload_prefills_and_user_edit_wins(temp_db, tmp_path):
 def test_req02_dashboard_renders_and_day_pick(temp_db, sample):
     import obi_pipeline as pipeline
     aid = pipeline.save(sample["result"])
-    at = AppTest.from_file(APP, default_timeout=60)
+    at = app()
     at.session_state["current_id"] = aid
     at.run()
     day = sample["dashboard"]["dates"][0]
@@ -135,7 +190,7 @@ def test_req02_dashboard_empty_history(temp_db, sample):
     r = sample["result"]
     import pandas as pd
     aid = store.save_analysis(r["info"], r["checks"], pd.DataFrame(), r["timeline"].iloc[0:0], pd.DataFrame())
-    at = AppTest.from_file(APP, default_timeout=60)
+    at = app()
     at.session_state["current_id"] = aid
     at.run()
     assert not at.exception, at.exception
@@ -146,7 +201,7 @@ def test_req07_report_only_on_click_and_ai_persisted(temp_db, sample):
     import obi_pipeline as pipeline
     # 정식 이력 + 검토 미입력 → 리포트 버튼 비활성, 화면을 열어도 리포트 이력 없음
     aid = pipeline.save(sample["result"])
-    at = AppTest.from_file(APP, default_timeout=60)
+    at = app()
     at.session_state["current_id"] = aid
     at.run()
     assert at.button(key="new_report").disabled
@@ -162,7 +217,7 @@ def test_req07_report_only_on_click_and_ai_persisted(temp_db, sample):
 
     # AI 의견은 DB 에 있으므로 새 세션(브라우저 새로 열기)에서도 보인다
     store.save_ai_opinion(aid, "저장된 AI 의견 본문", "ollama", "qwen", "u")
-    fresh = AppTest.from_file(APP, default_timeout=60)
+    fresh = app()
     fresh.session_state["current_id"] = aid
     fresh.run()
     assert any("저장된 AI 의견 본문" in m.value for m in fresh.markdown)
@@ -174,7 +229,7 @@ def test_req07_ai_request_saves_to_db(temp_db, sample, monkeypatch):
     import obi_pipeline as pipeline
     monkeypatch.setattr(obi_ai, "stream_analyze", lambda *a, **k: iter(["**4. 최종 위험 수준** ", "Medium"]))
     aid = pipeline.save(sample["result"], test=True)
-    at = AppTest.from_file(APP, default_timeout=60)
+    at = app()
     at.session_state["current_id"] = aid
     at.run()
     at.button(key="new_llm_run").click().run()
@@ -190,7 +245,7 @@ def test_req12_pledge_upload_flow(temp_db, sample):
     import obi_pipeline as pipeline
     aid = pipeline.save(sample["result"])
     store.update_review(aid, "예", "미확인", "인터뷰 완료", "검토 중", "김검토")
-    at = AppTest.from_file(APP, default_timeout=60)
+    at = app()
     at.session_state["current_id"] = aid
     at.run()
     assert any("보안서약서 PDF" in w.value for w in at.warning)                  # 입력 필요

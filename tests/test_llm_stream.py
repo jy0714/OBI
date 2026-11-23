@@ -41,13 +41,8 @@ STREAMS = {
     "openai": ['data: {"choices":[{"delta":{"content":"안녕"}}]}', "",
                'data: {"choices":[{"delta":{}}]}', 'data: {"choices":[{"delta":{"content":"하세요"}}]}',
                "data: [DONE]", 'data: {"choices":[{"delta":{"content":"무시"}}]}'],
-    "anthropic": ["event: message_start", 'data: {"type":"message_start"}',
-                  'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"안녕"}}',
-                  'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"하세요"}}',
-                  'data: {"type":"message_stop"}',
-                  'data: {"type":"content_block_delta","delta":{"text":"무시"}}'],
 }
-URLS = {"ollama": "/api/chat", "openai": "/chat/completions", "anthropic": "/v1/messages"}
+URLS = {"ollama": "/api/chat", "openai": "/chat/completions"}
 
 
 @pytest.mark.parametrize("provider", list(STREAMS))
@@ -58,13 +53,10 @@ def test_stream_parsing(monkeypatch, provider):
     assert sent["url"].endswith(URLS[provider])
     body = sent["json"]
     assert body["stream"] is True and body["model"] == cfg["model"]
-    if provider == "anthropic":
-        assert body["system"] and all(m["role"] != "system" for m in body["messages"])
-        assert sent["headers"]["x-api-key"] == "k"
 
 
-@pytest.mark.parametrize("provider", ["openai", "anthropic"])
-def test_auth_error(monkeypatch, provider):
+def test_auth_error(monkeypatch):
+    provider = "openai"
     _patch(monkeypatch, FakeResp([], status=401))
     with pytest.raises(RuntimeError, match="API 키"):
         list(ai.stream_analyze(dict(ai.PROVIDER_DEFAULTS[provider], provider=provider), *ARGS))
@@ -80,3 +72,46 @@ def test_connection_error(monkeypatch, provider):
 def test_unknown_provider():
     with pytest.raises(ValueError):
         list(ai.stream_analyze({"provider": "x"}, *ARGS))
+
+
+def test_anthropic_removed():
+    assert set(ai.PROVIDER_DEFAULTS) == {"ollama", "openai"}
+    with pytest.raises(ValueError):
+        list(ai.stream_analyze({"provider": "anthropic"}, *ARGS))
+
+
+class FakeTags:
+    def __init__(self, names):
+        self.names = names
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return {"models": [{"name": n} for n in self.names]}
+
+
+@pytest.mark.parametrize("installed, allowed, expect", [
+    (["qwen3.8:27b", "llama3:8b", "gemma4:31b"], ["gemma4:31b", "qwen3.8:27b"], ["gemma4:31b", "qwen3.8:27b"]),
+    (["llama3:8b"], ["gemma4:31b", "qwen3.8:27b"], []),
+    (["qwen3.8:27b"], ["gemma4:31b", "qwen3.8:27b"], ["qwen3.8:27b"]),
+    (["b:latest", "a:1"], [], ["a:1", "b:latest"]),
+    (["gemma4:latest"], ["gemma4"], ["gemma4:latest"]),
+])
+def test_list_ollama_models_filters_installed(monkeypatch, installed, allowed, expect):
+    sent = {}
+
+    def fake_get(url, **kw):
+        sent["url"] = url
+        return FakeTags(installed)
+    monkeypatch.setattr(ai.requests, "get", fake_get)
+    assert ai.list_ollama_models("http://h:11434/", allowed) == expect
+    assert sent["url"] == "http://h:11434/api/tags"
+
+
+def test_list_ollama_models_server_down(monkeypatch):
+    def fake_get(url, **kw):
+        raise requests.exceptions.ConnectionError("down")
+    monkeypatch.setattr(ai.requests, "get", fake_get)
+    with pytest.raises(ConnectionError, match="ollama serve"):
+        ai.list_ollama_models("http://h:11434", ["gemma4:31b"])

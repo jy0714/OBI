@@ -230,14 +230,37 @@ def mock_insights(tl, cands):
 
 
 # ===========================================================================
-# LLM 연동 (Ollama · OpenAI 호환 · Anthropic)
+# LLM 연동 (로컬 Ollama · 외부 OpenAI 형식 API)
 # ===========================================================================
 
 PROVIDER_DEFAULTS = {
-    "ollama":    {"model": "qwen2.5:7b",               "base_url": "http://localhost:11434", "api_key": ""},
-    "openai":    {"model": "gpt-4o-mini",              "base_url": "https://api.openai.com/v1", "api_key": ""},
-    "anthropic": {"model": "claude-haiku-4-5-20251001","base_url": "https://api.anthropic.com", "api_key": ""},
+    "ollama": {"model": "gemma4:31b",  "base_url": "http://localhost:11434",    "api_key": ""},
+    "openai": {"model": "gpt-4o-mini", "base_url": "https://api.openai.com/v1", "api_key": ""},
 }
+
+
+def list_ollama_models(base_url, allowed=(), timeout=3):
+    """`ollama list` 와 같은 목록(GET /api/tags)에서 allowed 에 든 모델만 돌려준다.
+
+    allowed 가 비면 설치된 모든 모델. 순서는 allowed 순서(없으면 이름순).
+    ':latest' 태그는 생략해 적어도 같은 모델로 본다.
+    Raises: ConnectionError (서버 연결 불가 · 응답 이상)
+    """
+    base = (base_url or PROVIDER_DEFAULTS["ollama"]["base_url"]).rstrip("/")
+    try:
+        resp = requests.get(f"{base}/api/tags", timeout=timeout)
+        resp.raise_for_status()
+        names = [m.get("name") or m.get("model") or "" for m in resp.json().get("models", [])]
+    except (requests.exceptions.RequestException, ValueError, AttributeError) as e:
+        raise ConnectionError(f"Ollama 서버({base})에서 모델 목록을 가져올 수 없습니다. "
+                              "`ollama serve` 로 실행 중인지 확인하세요.") from e
+
+    def norm(n):
+        return n[:-len(":latest")] if n.endswith(":latest") else n
+    installed = {norm(n): n for n in names if n}
+    if not allowed:
+        return sorted(installed.values())
+    return [installed[norm(a)] for a in allowed if norm(a) in installed]
 
 _SYS = (
     "당신은 기업 보안팀의 퇴직자 보안 로그 분석 전문가입니다. "
@@ -337,7 +360,7 @@ def _make_messages(info, crit_df, cands, tl):
 def stream_analyze(cfg, info, crit_df, cands, tl):
     """LLM 스트리밍 제너레이터.
 
-    cfg = {"provider": "ollama"|"openai"|"anthropic",
+    cfg = {"provider": "ollama"|"openai",
            "model": str, "base_url": str, "api_key": str}
 
     Raises:
@@ -349,8 +372,6 @@ def stream_analyze(cfg, info, crit_df, cands, tl):
         yield from _stream_ollama(cfg, info, crit_df, cands, tl)
     elif provider == "openai":
         yield from _stream_openai(cfg, info, crit_df, cands, tl)
-    elif provider == "anthropic":
-        yield from _stream_anthropic(cfg, info, crit_df, cands, tl)
     else:
         raise ValueError(f"알 수 없는 provider: {provider}")
 
@@ -435,52 +456,3 @@ def _stream_openai(cfg, info, crit_df, cands, tl):
                 yield chunk
     except requests.exceptions.ConnectionError:
         raise ConnectionError(f"API 서버({base})에 연결할 수 없습니다.")
-
-
-# ---------------------------------------------------------------------------
-# Anthropic
-# ---------------------------------------------------------------------------
-def _stream_anthropic(cfg, info, crit_df, cands, tl):
-    base = cfg.get("base_url", "https://api.anthropic.com").rstrip("/")
-    headers = {
-        "Content-Type": "application/json",
-        "x-api-key": cfg.get("api_key", ""),
-        "anthropic-version": "2023-06-01",
-    }
-    msgs = _make_messages(info, crit_df, cands, tl)
-    system_content = next((m["content"] for m in msgs if m["role"] == "system"), "")
-    user_msgs = [m for m in msgs if m["role"] != "system"]
-    try:
-        resp = requests.post(
-            f"{base}/v1/messages",
-            headers=headers,
-            json={"model": cfg["model"],
-                  "max_tokens": 4096,
-                  "system": system_content,
-                  "messages": user_msgs,
-                  "stream": True},
-            stream=True, timeout=300,
-        )
-        if resp.status_code == 401:
-            raise RuntimeError("API 키가 올바르지 않습니다.")
-        if resp.status_code == 404:
-            raise RuntimeError(f"모델 '{cfg['model']}'을 찾을 수 없습니다.")
-        resp.raise_for_status()
-        for raw in resp.iter_lines():
-            if not raw:
-                continue
-            line = raw.decode() if isinstance(raw, bytes) else raw
-            if line.startswith("data: "):
-                line = line[6:]
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if obj.get("type") == "content_block_delta":
-                chunk = obj.get("delta", {}).get("text", "")
-                if chunk:
-                    yield chunk
-            elif obj.get("type") == "message_stop":
-                break
-    except requests.exceptions.ConnectionError:
-        raise ConnectionError(f"Anthropic API({base})에 연결할 수 없습니다.")

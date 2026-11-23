@@ -22,6 +22,14 @@ if errorlevel 1 (
     )
 )
 
+if not exist "obi.ini" (
+    copy /y "obi.ini.example" "obi.ini" >nul
+    echo [안내] obi.ini 를 만들었습니다. [auth] password 에 4자리 숫자를 넣고 저장한 뒤 다시 실행하세요.
+    notepad "obi.ini"
+    pause
+    exit /b 1
+)
+
 echo OBI 를 시작합니다. 브라우저가 자동으로 열립니다. 종료하려면 이 창을 닫거나 Ctrl+C 를 누르세요.
 python -m streamlit run app.py
 pause

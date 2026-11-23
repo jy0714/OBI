@@ -12,6 +12,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 streamlit run app.py
 ```
 
+Or double-click `run_obi.bat` (installs missing packages; creates `obi.ini` from the example on first run).
+
+### Local config / login (`obi.ini`, gitignored)
+
+`obi_config.py` reads `obi.ini` (or `OBI_CONFIG_PATH`); template is `obi.ini.example`. `[auth] password` must be exactly 4 digits — missing file or bad value **fails closed** (main screen never opens). `app.py:login_gate()` runs before the sidebar; 5 wrong tries → 30 s lock (per session). `[ollama] models` = allowed models; the sidebar shows only those also in `ollama list` (`obi_ai.list_ollama_models`, GET `/api/tags`; empty = all installed). `[openai]` = the only external API (OpenAI `/chat/completions` format). Tests use a temp `obi.ini` (password `1234`, autouse fixture in `tests/conftest.py`) and start app sessions with `obi_authed=True`.
+
 The preprocessor can also be run standalone (useful for batch/debugging):
 
 ```bash
@@ -50,6 +56,7 @@ obi_preprocess.py — DDI log → unified timeline + verification checks
 obi_criteria.py   — check rules (B/R codes) + keyword/domain dictionaries
 obi_ai.py         — mock risk scorer; main LLM integration point
 obi_store.py      — SQLite persistence (data/obi_history.db)
+obi_config.py     — local obi.ini: login password, Ollama allowed models, OpenAI-format API
 obi_pipeline.py   — headless logic shared by app and harness: read_log/analyze_file/save, derive (candidates),
                     key_files (REQ-03), personal_mail (REQ-05), dashboard (REQ-02), board (REQ-06), review_missing (REQ-08)
 obi_charts.py     — Altair charts for the dashboard (no streamlit; fixed channel colors)

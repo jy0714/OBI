@@ -37,3 +37,6 @@ venv/
 .vscode/
 .idea/
 Thumbs.db
+
+# 로컬 설정 (접속 비밀번호 · API 키) — 견본은 obi.ini.example
+obi.ini

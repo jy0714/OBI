@@ -22,10 +22,14 @@ def read_log(src_path):
     return xls, prep.extract_person(xls)
 
 
+PERSON_FIELDS = ("이름", "부서")     # 화면에서 입력·확인하는 인적 사항 (REQ-14: 직급 제외)
+
+
 def person_sources(person, values):
-    """REQ-10 인적 사항 출처: 로그 값 그대로='로그', 로그 값을 고침='수정', 로그에 없어 직접 입력='직접'"""
+    """REQ-10 인적 사항 출처: 로그 값 그대로='로그', 로그 값을 고침='수정', 로그에 없어 직접 입력='직접'
+    직급은 화면에서 입력받지 않으므로 출처를 남기지 않는다 (REQ-14)."""
     out = {}
-    for k in ("이름", "직급", "부서"):
+    for k in PERSON_FIELDS:
         auto, val = str(person.get(k) or "").strip(), str(values.get(k) or "").strip()
         out[k] = ("로그" if val == auto else "수정") if auto else "직접"
     return out
@@ -209,7 +213,7 @@ def pledge_status(rec):
     return "해당 없음"
 
 
-BOARD_COLUMNS = ["이력#", "분석일시", "회사", "이름", "직급", "부서", "퇴직일자", "최고 등급", "검토 후보 건수",
+BOARD_COLUMNS = ["이력#", "분석일시", "회사", "이름", "부서", "퇴직일자", "최고 등급", "검토 후보 건수",
                  "검토 상태", "검토자", "입력 완료", "서약서", "테스트"]
 NO_GRADE = "(없음)"     # 옛 이력 등 등급이 저장되지 않은 건
 
@@ -239,7 +243,7 @@ def board(df, q="", companies=None, states=None, grades=None, date_from=None, da
               | v["부서"].astype(str).str.contains(q, na=False, regex=False)]
     v = v.sort_values("id", ascending=False)
     out = pd.DataFrame({
-        "이력#": v["id"], "분석일시": v["분석일시"], "회사": v["회사"], "이름": v["이름"], "직급": v["직급"],
+        "이력#": v["id"], "분석일시": v["분석일시"], "회사": v["회사"], "이름": v["이름"],
         "부서": v["부서"], "퇴직일자": v["퇴직일자"], "최고 등급": v["최고등급"],
         "검토 후보 건수": pd.to_numeric(v["검토후보건수"], errors="coerce").astype("Int64"),   # 옛 이력(NULL)은 빈칸 (REQ-15)
         "검토 상태": v["검토상태"], "검토자": v["검토자"],

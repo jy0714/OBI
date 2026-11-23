@@ -31,7 +31,7 @@ def build_report(a, requester="", now=None):
     pmail = pipeline.personal_mail(tl)
 
     rows = [
-        ("대상자", f"{a['이름']} · {a['회사']} {a['부서']} {a['직급']}".strip()),
+        ("대상자", f"{a['이름']} · {a['회사']} {a['부서']}".strip()),
         ("계정", a.get("계정", "")),
         ("퇴직(예정)일", a["퇴직일자"]), ("로그 기준일", a["기준일"]),
         ("이력", f"#{a['id']} · 분석 {a['분석일시']} · {'Test' if a.get('테스트여부') else '정식'}"),

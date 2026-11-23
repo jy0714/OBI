@@ -174,8 +174,9 @@ def test_req06_board_filters(tmp_path, monkeypatch, sample):
 def test_req10_person_sources():
     import obi_pipeline as p
     person = {"이름": "홍길동", "직급": "선임", "부서": ""}
-    assert p.person_sources(person, {"이름": "홍길동", "직급": "책임", "부서": "보안팀"}) == \
-        {"이름": "로그", "직급": "수정", "부서": "직접"}
+    assert p.person_sources(person, {"이름": "홍길순", "직급": "책임", "부서": "보안팀"}) == \
+        {"이름": "수정", "부서": "직접"}                                     # 직급은 출처 없음 (REQ-14)
+    assert p.person_sources(person, {"이름": "홍길동", "부서": ""}) == {"이름": "로그", "부서": "직접"}
 
 
 # --- REQ-02 채널·추이 대시보드 -------------------------------------------------
@@ -353,3 +354,22 @@ def test_req15_one_indicator_board_and_report(tmp_path, monkeypatch, sample):
     items = report.build_report(store.get_analysis(aid), "t", now="-")["요약"]["항목"].tolist()
     assert "검토 후보" in items and "확인 필요 행위" not in items
     assert "확인 필요 행위" not in sample["lead"] and "검토 후보" in sample["lead"]
+
+
+# --- REQ-14 직급 칸 정리 ------------------------------------------------------
+def test_req14_rank_hidden_but_legacy_export_kept(tmp_path, monkeypatch, sample):
+    import obi_pipeline as p
+    import obi_report as report
+    import obi_store as store
+    monkeypatch.setattr(store, "DB_PATH", str(tmp_path / "b.db"))
+    store.init_db()
+    aid = p.save(sample["result"])
+    a = store.get_analysis(aid)
+    assert a["직급"] == "선임"                                                  # DB 에는 저장
+    assert "직급" not in p.BOARD_COLUMNS and "직급" not in p.board(store.list_analyses()).columns
+    assert "직급" not in sample["prompt"] and "선임" not in sample["prompt"]
+    summary = report.build_report(a, "t", now="-")["요약"]
+    assert "선임" not in summary.set_index("항목").loc["대상자", "내용"]
+    legacy = store.to_legacy_frame(store.list_analyses())                       # 기존 양식은 그대로
+    assert list(legacy.columns)[:len(store.LEGACY_COLUMNS)] == store.LEGACY_COLUMNS
+    assert legacy["직급"].tolist() == ["선임"]

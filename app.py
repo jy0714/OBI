@@ -279,8 +279,9 @@ def render_detail(analysis_id, key):
                 f" · 퇴직일 {a['퇴직일자']}</div>"
                 f"<div class='obi-card-meta'>이력 #{a['id']} · 분석 {a['분석일시']} · 로그 기준일 {a['기준일']}"
                 f" · 계정 {a['계정']} · 로그 검증 {a['검증상태']}"
-                + (" · 인적 사항 " + " ".join(f"{k}({v})" for k, v in a["인적사항출처"].items())
-                   if a.get("인적사항출처") else "")
+                + (" · 인적 사항 " + " ".join(f"{k}({v})" for k, v in src.items())
+                   if (src := {k: v for k, v in (a.get("인적사항출처") or {}).items()
+                               if k in pipeline.PERSON_FIELDS}) else "")
                 + "</div>", unsafe_allow_html=True)
     h2.markdown(chip(f"{GRADE_ICON.get(top_grade, '')} 최고 등급 {top_grade}", top_grade)
                 + (chip("TEST", "Low") if a["테스트여부"] else ""), unsafe_allow_html=True)
@@ -507,25 +508,25 @@ def page_new():
                     xls, person = read_upload(uploaded)
                     up = dict(id=uploaded.file_id, name=uploaded.name, xls=xls, person=person)
                     st.session_state["upload"] = up
-                    for k, field in (("f_name", "이름"), ("f_rank", "직급"), ("f_dept", "부서")):
+                    for k, field in (("f_name", "이름"), ("f_dept", "부서")):
                         st.session_state[k] = person.get(field, "")   # 위젯 생성 전에 값 채우기
                 except SystemExit as e:
                     st.error(str(e))
                     up = None
         person = up["person"] if up else {}
         if up:
-            got = [f"{k} {person[k]}" for k in ("이름", "직급", "부서") if person.get(k)]
+            got = [f"{k} {person[k]}" for k in pipeline.PERSON_FIELDS if person.get(k)]
             st.caption(("로그에서 채운 값: " + ", ".join(got) + " · 고칠 수 있습니다" if got
                         else "로그에서 인적 사항을 찾지 못했습니다. 직접 입력하세요.")
-                       + (f" · ⚠️ 로그 값이 여러 개: {', '.join(person['갈림'])}" if person.get("갈림") else ""))
+                       + (f" · ⚠️ 로그 값이 여러 개: {', '.join(g)}"
+                          if (g := [k for k in person.get("갈림", []) if k in pipeline.PERSON_FIELDS]) else ""))
 
         # 2) 인적 사항·조건 입력
         with st.form("new_analysis"):
-            c1, c2, c3, c4 = st.columns(4)
+            c1, c2, c3 = st.columns(3)
             company = c1.selectbox("회사 *", COMPANIES)
             name = c2.text_input("이름 *", key="f_name")
-            rank = c3.text_input("직급", key="f_rank")
-            dept = c4.text_input("부서", key="f_dept")
+            dept = c3.text_input("부서", key="f_dept")
             d1, d2, _ = st.columns([1, 1, 2])
             retire = d1.date_input("퇴직(예정)일 *", value=date.today())
             base = d2.date_input("로그 추출일", value=None, help="비워두면 로그의 마지막 날짜를 기준일로 사용합니다")
@@ -538,7 +539,9 @@ def page_new():
         if not up or not name.strip():
             st.error("이름과 추출로그 파일은 필수입니다.")
         else:
-            info = dict(회사=company, 이름=name.strip(), 직급=rank.strip(), 부서=dept.strip(), 퇴직일자=str(retire),
+            # 직급은 화면에 없다 (REQ-14). 로그에서 뽑힌 값만 저장해 기존 양식 내보내기에 쓴다
+            info = dict(회사=company, 이름=name.strip(), 직급=str(person.get("직급") or "").strip(),
+                        부서=dept.strip(), 퇴직일자=str(retire),
                         원본파일명=up["name"], 분석자=st.session_state.get("user", ""))
             sources = pipeline.person_sources(person, info)
             with st.spinner("로그를 정리하고 있습니다."):

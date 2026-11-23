@@ -60,8 +60,8 @@ def build_report(a, requester="", now=None):
 
     return {
         "요약": pd.DataFrame(rows, columns=["항목", "내용"]),
-        "주요 검토 파일": files,
-        "개인메일 발송": pmail,
+        "주요 검토 파일": files.reindex(columns=pipeline.KEY_FILE_VIEW),        # 이벤트ID 는 빼고 (REQ-17)
+        "개인메일 발송": pmail.reindex(columns=pipeline.PERSONAL_MAIL_VIEW),
         "검토 후보": cand_out,
         "기준 점검": crit,
         "검증결과": pd.DataFrame(a["검증결과"], columns=["확인 항목", "결과", "내용"]),

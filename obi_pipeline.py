@@ -68,6 +68,10 @@ PERSONAL_MAIL_COLUMNS = ["이벤트ID", "시각", "구분", "첨부", "수신자
                          "차단 여부", "점검결과", "점검 사유"]
 
 
+# 화면·리포트에 보여 줄 컬럼 (REQ-17). 이벤트ID 는 데이터에 남겨 원본 로그 연결에만 쓴다.
+PERSONAL_MAIL_VIEW = [c for c in PERSONAL_MAIL_COLUMNS if c != "이벤트ID"]
+
+
 def personal_mail(tl):
     """REQ-05 개인메일 발송: 개인메일 도메인 수신자가 있는 메일 + 개인메일 사이트 웹 업로드.
     참고(R1·R2·R4)로 빠진 건도 숨기지 않는다. 정렬: 첨부 있음 → 확인 필요 → 시간순."""
@@ -98,6 +102,7 @@ def personal_mail(tl):
 
 
 KEY_FILE_COLUMNS = ["파일명", "등급", "근거", "채널", "횟수", "최초 시각", "최종 시각", "나간 곳", "용량", "근거 이벤트ID"]
+KEY_FILE_VIEW = ["파일명", "등급", "근거", "채널", "횟수", "나간 곳", "용량", "최초 시각", "최종 시각"]   # REQ-17 화면용
 
 
 def _destination(r):

@@ -268,3 +268,31 @@ def test_req12_pledge_upload_flow(temp_db, sample):
 
     at.button(key="new_pledge_read").click().run()                               # 누를 때만 읽음 + 이력
     assert len(store.list_pledge_downloads(aid)) == 1
+
+
+def test_req17_tables_hide_event_id_but_open_raw_log(temp_db, sample):
+    """주요 검토 파일·개인메일 발송: 이벤트ID 는 숨기고, 행을 누르면 원본 로그(이벤트ID 없이)가 나온다"""
+    r = sample["result"]
+    aid = store.save_analysis(r["info"], r["checks"], r["summary"], r["timeline"], r["criteria"])
+    at = app()
+    at.session_state["current_id"] = aid
+    at.run()
+    shown = {d.proto.id: list(d.proto.column_order) for d in at.dataframe}
+    orders = [o for o in shown.values() if o]
+    import obi_pipeline as pipeline
+    assert pipeline.KEY_FILE_VIEW in orders and pipeline.PERSONAL_MAIL_VIEW in orders
+    n_tables = len(at.dataframe)
+    for key, ids_col, data, view in (("new_files", "근거 이벤트ID", sample["key_files"], pipeline.KEY_FILE_VIEW),
+                                     ("new_pmail", "이벤트ID", sample["personal_mail"], pipeline.PERSONAL_MAIL_VIEW)):
+        at.session_state[key] = {"selection": {"rows": [0], "columns": [], "cells": []}}
+        at.run()
+        assert not at.exception, at.exception
+        want = pipeline.events_of(sample["tl"], data.iloc[0][ids_col])
+        assert any(m.value == f"**원본 로그** · {len(want)}건" for m in at.markdown)
+        tables = list(at.dataframe)
+        assert len(tables) == n_tables + 1
+        i = next(i for i, d in enumerate(tables) if list(d.proto.column_order) == view)
+        raw = tables[i + 1].value                                    # 표 바로 아래에 열린 원본 로그
+        assert "이벤트ID" not in raw.columns and "원본시트" in raw.columns
+        assert raw["원본행"].tolist() == want["원본행"].tolist()
+        at.session_state[key] = {"selection": {"rows": [], "columns": [], "cells": []}}

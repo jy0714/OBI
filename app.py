@@ -142,21 +142,29 @@ def _ai_cfg():
 # ---------------------------------------------------------------------------
 # 분석 상세 (새 분석 직후와 이력 조회에서 공통 사용)
 # ---------------------------------------------------------------------------
-RAW_COLUMNS = ["이벤트ID", "시간", "채널", "행위", "대상", "수신자", "파일목록", "점검사유", "원본시트", "원본행"]
+# 분석가에게 보여 줄 원본 로그 컬럼 (REQ-17). 이벤트ID 는 데이터에만 두고 화면에서는 숨긴다.
+# 원본시트·원본행은 DDI 원본 엑셀에서 그 행을 찾는 근거라 남긴다. 통합타임라인 탭은 이벤트ID 유지.
+RAW_VIEW = ["시간", "채널", "행위", "대상", "수신자", "파일목록", "점검사유", "원본시트", "원본행"]
 
 
-def selectable_table(df, tl, key, ids_col, caption="행을 누르면 원본 로그가 아래에 나옵니다.", height=None):
-    """행을 누르면 그 행의 근거 이벤트 원본 로그를 보여 주는 표 (REQ-03·05·09)"""
-    opts = dict(hide_index=True, width="stretch", on_select="rerun", selection_mode="single-row", key=key)
+def raw_log(df):
+    """원본 로그 표 (이벤트ID 숨김)"""
+    st.dataframe(df.reindex(columns=RAW_VIEW), hide_index=True, width="stretch")
+
+
+def selectable_table(df, tl, key, ids_col, view, caption="행을 누르면 원본 로그가 아래에 나옵니다.", height=None):
+    """행을 누르면 그 행의 근거 이벤트 원본 로그를 보여 주는 표 (REQ-03·05·09).
+    view: 화면에 보일 컬럼. ids_col(이벤트ID)은 숨겨도 df 에 있으므로 원본 로그 연결은 그대로 된다 (REQ-17)."""
+    opts = dict(hide_index=True, width="stretch", on_select="rerun", selection_mode="single-row", key=key,
+                column_order=[c for c in view if c in df.columns])
     if height:
         opts["height"] = height
     event = st.dataframe(df, **opts)
     rows = event.selection.rows if event else []
     if rows:
-        picked = df.iloc[rows[0]]
-        st.markdown(f"**원본 로그** · {picked[ids_col]}")
-        st.dataframe(pipeline.events_of(tl, picked[ids_col]).reindex(columns=RAW_COLUMNS),
-                     hide_index=True, width="stretch")
+        events = pipeline.events_of(tl, df.iloc[rows[0]][ids_col])
+        st.markdown(f"**원본 로그** · {len(events)}건")
+        raw_log(events)
     elif caption:
         st.caption(caption)
 
@@ -197,7 +205,7 @@ def render_dashboard(tl, a, key):
                        format_func=lambda x: "날짜 선택" if x is None else
                        f"{x} · {counts.get(x, 0)}건" + (f" (확인 필요 {needs.get(x, 0)})" if needs.get(x, 0) else ""))
     if day:
-        st.dataframe(pipeline.events_on(tl, day).reindex(columns=RAW_COLUMNS), hide_index=True, width="stretch")
+        raw_log(pipeline.events_on(tl, day))
     with st.expander("채널 요약 표"):
         st.dataframe(a["채널요약"], hide_index=True, width="stretch")
         st.caption("평소 기간은 약 5개월이라 30일 평균으로 맞춰 최근 30일과 비교합니다. 건수가 적으면 차이가 과장될 수 있습니다.")
@@ -241,7 +249,7 @@ def candidate_card(r, tl, key):
     with st.container(border=True):
         st.markdown(chip(f"{GRADE_ICON.get(r.등급, '')} {r.등급}", r.등급) +
                     f'<span class="obi-card-title">{r.유형}</span>'
-                    f'<div class="obi-card-meta">{r.기간} · {r.건수}건 · 근거 {r.근거이벤트}</div>',
+                    f'<div class="obi-card-meta">{r.기간} · {r.건수}건</div>',
                     unsafe_allow_html=True)
         st.write(r.설명)
         with st.expander("판단 근거와 원본 로그"):
@@ -250,9 +258,7 @@ def candidate_card(r, tl, key):
                  for k, v in r.판단.items()]),
                 hide_index=True, width="stretch")
             ids = [x.strip() for x in r.근거이벤트.split(",")]
-            st.dataframe(pipeline.events_of(tl, ids).reindex(
-                columns=["이벤트ID", "시간", "채널", "행위", "대상", "수신자", "점검사유", "원본시트", "원본행"]),
-                hide_index=True, width="stretch")
+            raw_log(pipeline.events_of(tl, ids))
 
 
 def render_detail(analysis_id, key):
@@ -308,7 +314,7 @@ def render_detail(analysis_id, key):
         if files.empty:
             st.caption("확인 필요 행위에 등장한 파일이 없습니다.")
         else:
-            selectable_table(files, tl, f"{key}_files", "근거 이벤트ID")
+            selectable_table(files, tl, f"{key}_files", "근거 이벤트ID", pipeline.KEY_FILE_VIEW)
 
     # ---------------- 개인메일 발송 (REQ-05) ----------------
     with st.container(border=True):
@@ -318,7 +324,7 @@ def render_detail(analysis_id, key):
             st.caption("개인메일 도메인으로 보낸 메일이나 개인메일 사이트 업로드가 없습니다.")
         else:
             view = pmail.assign(첨부=pmail["첨부"].map(lambda x: "📎 첨부" if x else ""))
-            selectable_table(view, tl, f"{key}_pmail", "이벤트ID",
+            selectable_table(view, tl, f"{key}_pmail", "이벤트ID", pipeline.PERSONAL_MAIL_VIEW,
                              caption="📎 첨부가 있는 건이 위에 옵니다. 참고(차단·사내 동반·개인 문서)로 분류된 건도 함께 표시합니다. "
                                      "행을 누르면 원본 로그가 나옵니다.")
 

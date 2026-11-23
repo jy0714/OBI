@@ -318,3 +318,23 @@ def test_req12_board_column(tmp_path, monkeypatch, sample):
     v = p.board(store.list_analyses()).set_index("이력#")
     assert v.loc[a, "서약서"] == "필요" and v.loc[a, "입력 완료"] == "입력 필요"
     assert v.loc[b, "서약서"] == "첨부됨" and v.loc[b, "입력 완료"] == "완료"
+
+
+# --- REQ-17 분석가에게 필요한 컬럼만 표시 ------------------------------------------
+def test_req17_view_columns_hide_event_id(sample):
+    import obi_pipeline as p
+    assert "근거 이벤트ID" in sample["key_files"].columns                      # 데이터에는 그대로
+    assert "이벤트ID" in sample["personal_mail"].columns
+    assert p.KEY_FILE_VIEW == ["파일명", "등급", "근거", "채널", "횟수", "나간 곳", "용량", "최초 시각", "최종 시각"]
+    assert set(p.KEY_FILE_VIEW) <= set(p.KEY_FILE_COLUMNS)
+    assert set(p.PERSONAL_MAIL_VIEW) <= set(p.PERSONAL_MAIL_COLUMNS)
+    assert not any("이벤트ID" in c for c in p.KEY_FILE_VIEW + p.PERSONAL_MAIL_VIEW)
+
+
+def test_req17_report_sheets_without_event_id(sample):
+    import obi_report as report
+    sheets = report.build_report(sample["analysis"], "t", now="-")
+    for name in ("주요 검토 파일", "개인메일 발송"):
+        assert not any("이벤트ID" in c for c in sheets[name].columns), name
+    assert "이벤트ID" in sheets["통합타임라인"].columns                          # 타임라인 시트는 유지
+    assert len(sheets["주요 검토 파일"]) == len(sample["key_files"])

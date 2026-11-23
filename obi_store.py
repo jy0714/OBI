@@ -39,6 +39,7 @@ MIGRATIONS = [
     ("삭제일시", "TEXT DEFAULT ''"),
     # 2026-11-23 요구사항
     ("검토후보건수", "INTEGER"),                   # REQ-15 게시판 '검토 후보 건수' (옛 이력은 NULL → 빈칸)
+    ("원본로그_json", "TEXT DEFAULT ''"),          # LLM 전달용 원본 로그 시트 {시트명: [행...]} (옛 이력은 빈칸)
 ]
 
 LIST_COLUMNS = ["id", "분석일시", "분석자", "회사", "이름", "직급", "부서", "분류", "퇴직일자", "기준일", "이벤트수",
@@ -115,11 +116,12 @@ def init_db():
 
 
 def save_analysis(info, checks, summary, timeline, criteria=None, *, test=False, top_grade="", need_count=None,
-                  sources=None, cand_count=None):
+                  sources=None, cand_count=None, raw=None):
     """분석 직후 자동 저장. 저장된 이력 id를 돌려준다.
 
     test: Test 로 실행한 분석 (REQ-08) / top_grade·need_count: 게시판 목록용 (REQ-06)
     cand_count: 검토 후보 건수 (REQ-15 게시판)
+    raw: 원본 로그 시트 {시트명: DataFrame} (prep.raw_sheets) — LLM 분석에 함께 보낸다
     sources: 인적 사항 출처 {"이름": "로그"|"수정"|"직접", ...} (REQ-10)
     """
     ok = all("확인 필요" not in str(c[1]) for c in checks)
@@ -127,8 +129,8 @@ def save_analysis(info, checks, summary, timeline, criteria=None, *, test=False,
         cur = con.execute("""
             INSERT INTO analyses (분석일시, 분석자, 회사, 이름, 직급, 부서, 분류, 계정, 퇴직일자, 기준일, 원본파일명,
                                   이벤트수, 검증상태, 검증결과_json, 채널요약_json, 타임라인_json, 기준점검_json,
-                                  테스트여부, 최고등급, 확인필요건수, 인적사항출처_json, 검토후보건수)
-            VALUES (?, ?, ?, ?, ?, ?, '퇴직자', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                  테스트여부, 최고등급, 확인필요건수, 인적사항출처_json, 검토후보건수, 원본로그_json)
+            VALUES (?, ?, ?, ?, ?, ?, '퇴직자', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (_now(), info.get("분석자", ""), info["회사"], info["이름"],
              info["직급"], info["부서"], info["계정"], info["퇴직일자"], info["기준일"], info["원본파일명"],
              len(timeline), "정상" if ok else "확인 필요",
@@ -137,7 +139,9 @@ def save_analysis(info, checks, summary, timeline, criteria=None, *, test=False,
              timeline.to_json(orient="records", force_ascii=False, date_format="iso"),
              (criteria if criteria is not None else pd.DataFrame()).to_json(orient="records", force_ascii=False),
              1 if test else 0, top_grade or "", need_count,
-             json.dumps(sources or {}, ensure_ascii=False), cand_count))
+             json.dumps(sources or {}, ensure_ascii=False), cand_count,
+             json.dumps({n: {"columns": [str(c) for c in df.columns], "data": df.values.tolist()}
+                         for n, df in (raw or {}).items()}, ensure_ascii=False)))
         return cur.lastrowid
 
 
@@ -329,6 +333,8 @@ def get_analysis(analysis_id):
     d["기준점검"] = pd.DataFrame(json.loads(d.pop("기준점검_json", None) or "[]"))
     d["인적사항출처"] = json.loads(d.pop("인적사항출처_json", None) or "{}")
     d["AI이전생성일시"] = json.loads(d.pop("AI이전생성일시_json", None) or "[]")
+    d["원본로그"] = {n: pd.DataFrame(v["data"], columns=v["columns"])
+                    for n, v in json.loads(d.pop("원본로그_json", None) or "{}").items()}
     for k in ("AI의견", "AI프로바이더", "AI모델", "AI생성일시", "AI요청자", "최고등급", "삭제자", "삭제일시"):
         d[k] = d.get(k) or ""
     d["테스트여부"] = int(d.get("테스트여부") or 0)

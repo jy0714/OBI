@@ -262,6 +262,36 @@ def rows_label(rows):
     return f"{', '.join(parts)} ({len(rows)}행)"
 
 
+def rows_of_label(label):
+    """rows_label() 의 반대: '3-5, 9 (4행)' → [3, 4, 5, 9]"""
+    out = []
+    for part in str(label or "").split("(")[0].split(","):
+        a, _, b = part.strip().partition("-")
+        if a.strip().isdigit():
+            lo = int(a)
+            hi = int(b) if b.strip().isdigit() else lo
+            out.extend(range(lo, hi + 1))
+    return out
+
+
+def raw_sheets(xls):
+    """LLM 전달용 원본 로그: 로그 시트별 원본 행을 문자열 표로 (헤더 아래 행만, '원본행' = 엑셀 행 번호).
+    타임라인의 원본시트·원본행과 같은 번호를 쓴다."""
+    out = {}
+    for prefix, key, _, _ in SHEETS:
+        name = find_sheet(xls, prefix)
+        if name is None:
+            continue
+        _, df = read_sheet(xls, name, key)
+        if df is None:
+            continue
+        df = df.rename(columns={"_원본행": "원본행"})
+        df = df[["원본행"] + [c for c in df.columns if c != "원본행"]]
+        out[name] = df.map(lambda v: "" if v is None or (isinstance(v, float) and pd.isna(v)) or v is pd.NaT
+                           else str(v)).reset_index(drop=True)
+    return out
+
+
 def ev(**kw):
     base = dict(시간=pd.NaT, 채널="", 행위="", 대상="", 상세="", 계정="", 파일목록=[],
                 용량_bytes=None, 페이지수=None, 첨부수=None, 차단여부="허용", 개인메일="",

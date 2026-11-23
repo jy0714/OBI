@@ -7,7 +7,7 @@ import requests
 
 import obi_ai as ai
 
-ARGS = ({"이름": "t"}, pd.DataFrame(), pd.DataFrame(), pd.DataFrame())
+ARGS = ("프롬프트 본문",)
 
 
 class FakeResp:
@@ -53,6 +53,7 @@ def test_stream_parsing(monkeypatch, provider):
     assert sent["url"].endswith(URLS[provider])
     body = sent["json"]
     assert body["stream"] is True and body["model"] == cfg["model"]
+    assert body["messages"][-1] == {"role": "user", "content": "프롬프트 본문"}
 
 
 def test_auth_error(monkeypatch):
@@ -115,3 +116,21 @@ def test_list_ollama_models_server_down(monkeypatch):
     monkeypatch.setattr(ai.requests, "get", fake_get)
     with pytest.raises(ConnectionError, match="ollama serve"):
         ai.list_ollama_models("http://h:11434", ["gemma4:31b"])
+
+
+def test_generation_options(monkeypatch):
+    """Ollama: num_ctx·temperature 를 options 로 / OpenAI 형식: temperature"""
+    sent = _patch(monkeypatch, FakeResp(STREAMS["ollama"]))
+    list(ai.stream_analyze(dict(ai.PROVIDER_DEFAULTS["ollama"], provider="ollama", num_ctx=32768, temperature=0.2), *ARGS))
+    assert sent["json"]["options"] == {"num_ctx": 32768, "temperature": 0.2}
+    sent = _patch(monkeypatch, FakeResp(STREAMS["openai"]))
+    list(ai.stream_analyze(dict(ai.PROVIDER_DEFAULTS["openai"], provider="openai", temperature=0.2), *ARGS))
+    assert sent["json"]["temperature"] == 0.2 and "options" not in sent["json"]
+
+
+@pytest.mark.parametrize("provider", list(STREAMS))
+def test_timeout_is_explained(monkeypatch, provider):
+    sent = _patch(monkeypatch, exc=requests.exceptions.ReadTimeout("slow"))
+    with pytest.raises(RuntimeError, match="timeout"):
+        list(ai.stream_analyze(dict(ai.PROVIDER_DEFAULTS[provider], provider=provider, timeout=5), *ARGS))
+    assert sent["timeout"] == (10, 5)

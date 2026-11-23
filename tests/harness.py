@@ -44,9 +44,9 @@ ARTIFACTS = ["schema.json", "excel.json", "app.json", "prompt.txt"]
 
 SAMPLE_INFO = dict(회사="DBI", 이름="테스트", 직급="선임", 부서="보안기술팀", 원본파일명="sample_ddi.xlsx", 분석자="harness")
 
-# LLM 보고서가 지켜야 할 형식 (build_llm_prompt 의 '분석 의견 작성 요청' 과 일치)
-REPORT_SECTIONS = ["1. 종합 위험 평가", "2. 핵심 우려 사항", "3. 추가 확인 필요 사항", "4. 최종 위험 수준"]
-REPORT_LEVELS = ("Critical", "Medium", "Low")
+# LLM 보고서가 지켜야 할 틀 — 앱이 응답마다 쓰는 것과 같은 정의 (obi_ai)
+REPORT_SECTIONS = ai.REPORT_SECTIONS
+REPORT_LEVELS = ai.REPORT_LEVELS
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +109,7 @@ def execute(xlsx, retire_date, base_date=None, account=None, info=None):
 
     tl, crit = a["타임라인"], a["기준점검"]
     cands, lead, points = pipeline.derive(tl)
-    prompt = ai.build_llm_prompt(a, crit, cands, tl)
+    prompt = ai.build_llm_prompt(a, crit, cands, tl, a["원본로그"])
     return dict(result=r, excel=excel, analysis=a, tl=tl, crit=crit, cands=cands,
                 lead=lead, points=points, prompt=prompt, personal_mail=pipeline.personal_mail(tl),
                 key_files=pipeline.key_files(tl, cands),
@@ -203,13 +203,9 @@ def diff(expected, actual, max_lines=60):
     return report
 
 
-def check_report_format(text):
-    """LLM 보고서 형식 점검. 문제 목록을 돌려준다 (빈 목록 = 통과)."""
-    problems = [f"섹션 누락: {s}" for s in REPORT_SECTIONS if s not in (text or "")]
-    tail = (text or "").split(REPORT_SECTIONS[-1], 1)[-1]
-    if REPORT_SECTIONS[-1] in (text or "") and not any(lv in tail for lv in REPORT_LEVELS):
-        problems.append("최종 위험 수준에 Critical/Medium/Low 중 하나가 없음")
-    return problems
+def check_report_format(text, tl=None):
+    """LLM 보고서 틀 점검 — 앱이 응답마다 쓰는 obi_ai.check_report_format 과 같다 (빈 목록 = 통과)."""
+    return ai.check_report_format(text, tl)
 
 
 def _print_diff(report):

@@ -367,7 +367,8 @@ def test_req14_rank_hidden_but_legacy_export_kept(tmp_path, monkeypatch, sample)
     a = store.get_analysis(aid)
     assert a["직급"] == "선임"                                                  # DB 에는 저장
     assert "직급" not in p.BOARD_COLUMNS and "직급" not in p.board(store.list_analyses()).columns
-    assert "직급" not in sample["prompt"] and "선임" not in sample["prompt"]
+    summary_part = sample["prompt"].split("═══ 2부.")[0]          # 분석 대상·정리 결과 (원본 로그에는 직급이 있을 수 있음)
+    assert "직급" not in summary_part and "선임" not in summary_part
     summary = report.build_report(a, "t", now="-")["요약"]
     assert "선임" not in summary.set_index("항목").loc["대상자", "내용"]
     legacy = store.to_legacy_frame(store.list_analyses())                       # 기존 양식은 그대로

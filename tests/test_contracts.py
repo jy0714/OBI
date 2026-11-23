@@ -126,11 +126,56 @@ def test_prompt_lists_mail_recipients_and_attachments(sample):
             assert f in lines[r["이벤트ID"]], (r["이벤트ID"], f)
 
 
-def test_report_format_checker():
-    ok = "**1. 종합 위험 평가**\n..\n**2. 핵심 우려 사항**\n..\n**3. 추가 확인 필요 사항**\n- a\n**4. 최종 위험 수준**\nCritical: 근거"
-    assert harness.check_report_format(ok) == []
-    assert "섹션 누락: 2. 핵심 우려 사항" in harness.check_report_format(ok.replace("2. 핵심 우려 사항", ""))
-    assert harness.check_report_format(ok.replace("Critical", "모름"))
+GOOD_REPORT = ("**1. 종합 위험 평가**\n최근 30일에 반출이 몰림.\n"
+               "**2. 핵심 우려 사항**\n- [E0029] 임직원 연락처.xlsx → friend@gmail.com\n"
+               "**3. 기준 외 추가 발견**\n- [원본 USB로그 5행] 새벽 USB 사용\n"
+               "**4. 추가 확인 필요 사항**\n- 발송 목적\n"
+               "**5. 최종 위험 수준**\n**Critical**\n개인메일로 개인정보 발송")
+
+
+def test_report_format_checker(sample):
+    """LLM 보고서 틀: 내용은 자유, 제목·순서·최종 등급·근거 이벤트ID 만 고정"""
+    tl = sample["tl"]
+    assert harness.check_report_format(GOOD_REPORT, tl) == []
+    assert ai.report_level(GOOD_REPORT) == "Critical"
+    assert "섹션 누락: 3. 기준 외 추가 발견" in harness.check_report_format(GOOD_REPORT.replace("3. 기준 외 추가 발견", ""))
+    swapped = GOOD_REPORT.replace("1. 종합 위험 평가", "TMP").replace("2. 핵심 우려 사항", "1. 종합 위험 평가") \
+        .replace("TMP", "2. 핵심 우려 사항")
+    assert "섹션 순서가 다름" in harness.check_report_format(swapped)
+    assert any("Critical/Medium/Low" in p for p in harness.check_report_format(GOOD_REPORT.replace("**Critical**", "높음")))
+    assert any("E9999" in p for p in harness.check_report_format(GOOD_REPORT + " E9999", tl))   # 지어낸 이벤트ID
+    no_id = GOOD_REPORT.replace("[E0029] ", "")
+    assert "핵심 우려 사항에 근거 이벤트ID 가 없음" in harness.check_report_format(no_id, tl)
+    assert harness.check_report_format(no_id) == []                                        # tl 없으면 틀만
+
+
+def test_prompt_carries_full_timeline_and_raw_logs(sample):
+    """LLM 이 직접 분석하도록 통합타임라인 전체와 원본 로그 시트를 함께 넘긴다 (글자 상한 안일 때 전부)"""
+    prompt, tl, raw = sample["prompt"], sample["tl"], sample["analysis"]["원본로그"]
+    assert raw and len(prompt) <= ai.PROMPT_MAX_CHARS
+    for eid in tl["이벤트ID"]:
+        assert f"\n{eid}," in prompt, eid
+    for name, df in raw.items():
+        assert f"[원본 {name}] 전체 {len(df)}행\n" in prompt, name
+    for s in ai.REPORT_SECTIONS:
+        assert f"**{s}**" in prompt
+    assert "생략" not in prompt
+
+
+def test_prompt_budget_keeps_flagged_first(sample):
+    """글자 상한을 넘으면 확인 필요 → 참고 → 그 원본 행 → 나머지 순. 같은 입력 → 같은 프롬프트"""
+    a, tl = sample["analysis"], sample["tl"]
+    small = ai.build_llm_prompt(a, sample["crit"], sample["cands"], tl, a["원본로그"], max_chars=len(sample["prompt"]) - 3000)
+    assert small == ai.build_llm_prompt(a, sample["crit"], sample["cands"], tl, a["원본로그"],
+                                        max_chars=len(sample["prompt"]) - 3000)
+    assert "글자 상한으로 일부 생략" in small
+    part2 = small.split("═══ 2부.")[1].split("═══ 3부.")[0]
+    for eid in tl[tl["점검결과"] == "확인 필요"]["이벤트ID"]:
+        assert f"\n{eid}," in part2, eid
+    tiny = ai.build_llm_prompt(a, sample["crit"], sample["cands"], tl, a["원본로그"], max_chars=1)
+    assert "5. 최종 위험 수준" in tiny                        # 틀은 항상 남는다
+    old = ai.build_llm_prompt(a, sample["crit"], sample["cands"], tl, None)
+    assert "원본 로그가 저장되지 않은 이력" in old             # 옛 이력
 
 
 # --- 빈 입력 ---------------------------------------------------------------

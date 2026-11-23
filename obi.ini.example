@@ -11,6 +11,17 @@ base_url = http://localhost:11434
 ; 화면에서 고를 수 있는 모델 (쉼표로 구분). 이 중 `ollama list` 에 있는 모델만 표시됩니다.
 ; 비워 두면 `ollama list` 의 모든 모델을 표시합니다.
 models = gemma4:31b, qwen3.8:27b
+; 컨텍스트 길이(토큰). 원본 로그까지 보내므로 기본값(2~4K)보다 크게. GPU 메모리가 부족하면 줄이세요.
+num_ctx = 32768
+
+[llm]
+; LLM 에 보내는 프롬프트 글자 상한. 넘으면 확인 필요 → 참고 → 그 원본 행 → 나머지(최근 순)로 골라 담습니다.
+; 대략 글자 2개 ≈ 토큰 1개. num_ctx 보다 충분히 작게 두세요.
+max_prompt_chars = 40000
+; 0 에 가까울수록 같은 입력에 비슷한 답 (0.0 ~ 1.0)
+temperature = 0.2
+; 응답 대기 시간(초). 로컬 모델은 원본 로그를 읽는 데 몇 분 걸릴 수 있습니다.
+timeout = 900
 
 [openai]
 ; OpenAI 형식(/chat/completions) 외부 API

@@ -7,6 +7,8 @@ LLM 연동 전에 결과 화면과 점수 구조를 미리 확인하기 위한 �
 연동 시에는 mock_analyze() 만 실제 LLM 호출로 교체하면 되고,
 점수 계산(score_candidate)과 결과 형식은 그대로 쓴다.
 """
+import csv
+import io
 import json
 import math
 import re
@@ -317,35 +319,105 @@ def event_line(r):
     return "  " + " | ".join(parts)
 
 
-def build_llm_prompt(info, crit_df, cands, tl):
-    """분석 데이터를 LLM 프롬프트 문자열로 변환한다."""
+# ---------------------------------------------------------------------------
+# 프롬프트: 코드 정리 결과 + 통합타임라인 전체 + 원본 로그 → LLM 이 직접 분석, 결과 틀만 고정
+# ---------------------------------------------------------------------------
+PROMPT_MAX_CHARS = 40000     # 프롬프트 전체 글자 상한 (obi.ini [llm] max_prompt_chars). 넘으면 우선순위대로 행을 고른다
+PROMPT_MAX_CELL = 300        # 표 한 칸 글자 상한
+TL_PROMPT_COLUMNS = ["이벤트ID", "시간", "점검결과", "점검사유", "채널", "행위", "대상", "수신자", "파일목록",
+                     "용량_bytes", "상세", "업무시간외", "최초등장", "차단여부", "원본시트", "원본행"]
+
+# LLM 보고서 틀 (check_report_format 이 검사). 내용은 LLM 자유, 이 틀은 항상 같아야 한다.
+REPORT_SECTIONS = ["1. 종합 위험 평가", "2. 핵심 우려 사항", "3. 기준 외 추가 발견", "4. 추가 확인 필요 사항",
+                   "5. 최종 위험 수준"]
+REPORT_LEVELS = ("Critical", "Medium", "Low")
+_EID_RE = re.compile(r"\bE\d{4,}\b")
+
+
+def _cell(v):
+    if v is None or v is pd.NaT or (isinstance(v, float) and math.isnan(v)):
+        return ""
+    if isinstance(v, float) and v.is_integer():
+        v = int(v)
+    s = str(v).replace("\r", " ").replace("\n", "; ")
+    return s if len(s) <= PROMPT_MAX_CELL else s[:PROMPT_MAX_CELL] + "…"
+
+
+def _csv_line(values):
+    buf = io.StringIO()
+    csv.writer(buf, lineterminator="\n").writerow([_cell(v) for v in values])
+    return buf.getvalue()
+
+
+def _fit_tables(tables, budget):
+    """tables: [(제목, 컬럼, [(우선순위, 정렬키, 원래순서, 값목록), ...])] → 글자 예산 안에서 고른 표 문자열 목록.
+    우선순위 숫자가 작은 것부터, 같은 우선순위는 정렬키 순으로 담고, 표 안에서는 원래 순서로 다시 놓는다."""
+    heads = [_csv_line(cols) for _, cols, _ in tables]
+    used = sum(len(title) + len(h) + 60 for (title, _, _), h in zip(tables, heads))
+    cand = sorted(((pri, t, key, n, _csv_line(vals))
+                   for t, (_, _, rows) in enumerate(tables) for pri, key, n, vals in rows),
+                  key=lambda x: x[:4])
+    picked = {}
+    for pri, t, key, n, line in cand:
+        if used + len(line) > budget:
+            continue
+        used += len(line)
+        picked[(t, n)] = line
+    out = []
+    for t, (title, cols, rows) in enumerate(tables):
+        got = sorted(n for (tt, n) in picked if tt == t)
+        note = f"전체 {len(rows)}행" + ("" if len(got) == len(rows) else f" 중 {len(got)}행 (글자 상한으로 일부 생략)")
+        out.append(f"[{title}] {note}\n" + heads[t] + "".join(picked[(t, n)] for n in got))
+    return out
+
+
+def _timeline_rows(tl):
+    cols = [c for c in TL_PROMPT_COLUMNS if c in tl.columns]
+    res = tl["점검결과"].fillna("") if "점검결과" in tl else pd.Series("", index=tl.index)
+    times = pd.to_datetime(tl["시간"], errors="coerce") if "시간" in tl else pd.Series(pd.NaT, index=tl.index)
+    rows = []
+    for n, (idx, r) in enumerate(tl.iterrows()):
+        pri = {"확인 필요": 0, "참고": 1}.get(res[idx], 3)
+        t = times[idx]
+        key = -(t.value if pd.notna(t) else 0)                 # 같은 우선순위는 최근 것부터
+        vals = ["; ".join(prep.split_files(r[c])) if c == "파일목록" else r[c] for c in cols]
+        rows.append((pri, key, n, vals))
+    return cols, rows
+
+
+def _raw_rows(df, flagged_rows):
+    rows = []
+    for n, vals in enumerate(df.itertuples(index=False, name=None)):
+        row_no = int(vals[0]) if str(vals[0]).isdigit() else 0
+        rows.append((2 if row_no in flagged_rows else 4, -row_no, n, list(vals)))
+    return list(df.columns), rows
+
+
+def _crit_text(crit_df):
+    if crit_df.empty or "구분" not in crit_df.columns:
+        return "  (기준점검 데이터 없음)"
+    code = crit_df[crit_df["구분"] == "기준 점검"]
+    hit = code[code["이벤트ID"].fillna("") != ""]
+    miss = code[code["이벤트ID"].fillna("") == ""]
+    lines = [f"  [해당] {r.항목}: {r.결과}" + (f"  ({r.비고})" if str(r.비고).strip() else "")
+             for r in hit.itertuples()]
+    if not miss.empty:
+        lines.append("  [해당 없음] " + " · ".join(miss["항목"]))
+    return "\n".join(lines) or "  (해당 없음)"
+
+
+def build_llm_prompt(info, crit_df, cands, tl, raw=None, max_chars=None):
+    """LLM 프롬프트. 코드 정리 결과(참고) + 통합타임라인 전체 + 원본 로그를 함께 넘기고, 결과 틀만 고정한다.
+    raw: {시트명: DataFrame} (store 의 '원본로그'). 없으면 통합타임라인까지만.
+    같은 입력 → 같은 프롬프트 (글자 상한을 넘으면 정해진 우선순위로 행을 고른다)."""
+    max_chars = int(max_chars or PROMPT_MAX_CHARS)
     need = tl[tl["점검결과"].fillna("") == "확인 필요"] if "점검결과" in tl.columns else tl.iloc[0:0]
 
-    # SA팀 기준 점검
-    if not crit_df.empty and "구분" in crit_df.columns:
-        code = crit_df[crit_df["구분"] == "기준 점검"]
-        hit = code[code["이벤트ID"].fillna("") != ""]
-        miss = code[code["이벤트ID"].fillna("") == ""]
-        lines = [
-            f"  [해당] {r.항목}: {r.결과}" + (f"  ({r.비고})" if str(r.비고).strip() else "")
-            for r in hit.itertuples()
-        ]
-        if not miss.empty:
-            lines.append("  [해당 없음] " + " · ".join(miss["항목"]))
-        crit_text = "\n".join(lines) or "  (해당 없음)"
-    else:
-        crit_text = "  (기준점검 데이터 없음)"
-
-    # 위험 후보 사건
     if not cands.empty:
-        cand_text = "\n".join(
-            f"  [{r.구분}] {r.유형} | 등급 {r.등급} | {r.기간} | {r.건수}건\n    {r.설명}"
-            for r in cands.head(10).itertuples()
-        )
+        cand_text = "\n".join(f"  [{r.구분}] {r.유형} | 등급 {r.등급} | {r.기간} | {r.건수}건\n    {r.설명}"
+                              for r in cands.head(10).itertuples())
     else:
         cand_text = "  (확인 필요 행위 없음)"
-
-    # 확인 필요 이벤트 (최대 PROMPT_MAX_EVENTS 건)
     if not need.empty:
         ev_lines = [event_line(r) for _, r in need.head(PROMPT_MAX_EVENTS).iterrows()]
         if len(need) > PROMPT_MAX_EVENTS:
@@ -353,57 +425,131 @@ def build_llm_prompt(info, crit_df, cands, tl):
         event_text = "\n".join(ev_lines)
     else:
         event_text = "  (없음)"
+    ai_items = "\n".join(f"  - {code} {name}: {desc}" for code, name, desc in crit.AI_CHECKS)
 
-    return f"""당신은 기업 보안팀의 퇴직자 보안 로그 분석 전문가입니다.
-DLP·웹 필터·USB·출력 모니터링 데이터를 분석하여 내부 자료 유출 위험을 평가합니다.
-아래 데이터를 바탕으로 한국어로 분석 의견을 작성하세요.
+    head = f"""당신은 기업 보안팀의 퇴직자 보안 로그 분석 전문가입니다.
+DLP·웹 필터·USB·출력 모니터링 로그를 직접 분석하여 내부 자료 유출 위험을 평가합니다.
+1부는 코드가 규칙으로 정리한 결과이며 참고 자료입니다. 2부(통합타임라인)와 3부(원본 로그)를 직접 읽고,
+코드가 놓친 행위나 과하게 잡은 행위가 있으면 근거와 함께 밝히세요. 한국어로 작성합니다.
 
 ═══ 분석 대상 ═══
 이름: {info.get('이름','')} | 회사: {info.get('회사','')} | 부서: {info.get('부서','')}
 퇴직(예정)일: {info.get('퇴직일자','')} | 로그 기준일: {info.get('기준일','')} | 계정: {info.get('계정','')}
 전체 이벤트: {len(tl)}건 | 확인 필요: {len(need)}건
 
-═══ SA팀 기준 점검 결과 ═══
-{crit_text}
+═══ 1부. 코드 정리 결과 (참고) ═══
+[SA팀 기준 점검 결과]
+{_crit_text(crit_df)}
 
-═══ 위험 후보 사건 (코드 분류) ═══
+[위험 후보 사건 (코드 분류)]
 {cand_text}
 
-═══ 확인 필요 이벤트 목록 (최대 {PROMPT_MAX_EVENTS}건) ═══
+[확인 필요 이벤트 목록 (최대 {PROMPT_MAX_EVENTS}건)]
 {event_text}
+"""
 
+    tail = f"""
 ═══ 판단 기준 ═══
 - 외부로 나간 메일이라도 사내 도메인({', '.join(crit.INTERNAL_DOMAINS)}) 주소가 함께 수신한 '사내 동반' 메일은 업무용으로 보고 리스크를 낮게 판단합니다. 단, 보안등급 키워드 자료는 그대로 확인합니다.
+- 규칙으로 잡지 못하는 아래 관점은 원본 로그를 보고 직접 판단하세요.
+{ai_items}
+- 로그에 없는 사실은 지어내지 말고, 알 수 없으면 '추가 확인 필요 사항'에 적으세요.
 
-═══ 분석 의견 작성 요청 ═══
-위 데이터를 종합하여 아래 형식으로 작성하세요.
+═══ 작성 형식 (반드시 지킴) ═══
+아래 다섯 제목을 이 순서·이 표기 그대로 쓰세요. 제목 밖의 머리말·맺음말은 쓰지 않습니다.
+근거는 2부의 이벤트ID(예: E0012) 또는 3부의 [시트명 N행]으로 적습니다. 2부에 없는 이벤트ID는 쓰지 않습니다.
 
 **1. 종합 위험 평가**
 행위 패턴과 전체 위험 수준을 2~3 문단으로 서술하세요.
 
 **2. 핵심 우려 사항**
-가장 주의 깊게 검토해야 할 사건·패턴과 그 이유를 서술하세요. 근거가 된 파일명과 수신자를 함께 적으세요.
+- 항목마다 한 줄: [근거 이벤트ID] 무엇이 왜 우려되는지. 근거가 된 파일명과 수신자를 함께 적으세요.
 
-**3. 추가 확인 필요 사항**
-인터뷰 또는 추가 조사로 확인해야 할 사항을 목록으로 작성하세요.
+**3. 기준 외 추가 발견**
+- 1부(코드 점검)에 없거나 코드와 다르게 판단한 점. 항목마다 근거를 적으세요. 없으면 '없음' 한 줄.
 
-**4. 최종 위험 수준**
-Critical / Medium / Low 중 하나를 선택하고 판단 근거를 간략히 서술하세요.
+**4. 추가 확인 필요 사항**
+- 인터뷰 또는 추가 조사로 확인해야 할 사항.
+
+**5. 최종 위험 수준**
+첫 줄에 Critical / Medium / Low 중 하나만 쓰고, 다음 줄부터 판단 근거를 간략히 서술하세요.
 """
 
+    # 2부·3부: 남은 글자 수 안에서 확인 필요 → 참고 → 그 원본 행 → 나머지(최근 순) 순으로 담는다
+    flagged = tl[tl["점검결과"].fillna("").isin(["확인 필요", "참고"])] if "점검결과" in tl else tl.iloc[0:0]
+    ref_rows = {}
+    for _, r in flagged.iterrows():
+        ref_rows.setdefault(str(r.get("원본시트", "")), set()).update(prep.rows_of_label(r.get("원본행", "")))
+    tables = [("통합타임라인",) + _timeline_rows(tl)] if len(tl) else []
+    names = [n for n, df in (raw or {}).items() if len(df.columns)]
+    tables += [(f"원본 {n}",) + _raw_rows(raw[n], ref_rows.get(n, set())) for n in names]
+    parts = _fit_tables(tables, max(max_chars - len(head) - len(tail) - 300, 0))
+    tl_text = parts[0] if len(tl) else "(이벤트 없음)"
+    raw_parts = parts[1:] if len(tl) else parts
+    raw_text = "\n".join(raw_parts) if raw_parts else \
+        "(원본 로그가 저장되지 않은 이력입니다. 통합타임라인의 '상세' 컬럼을 참고하세요.)"
+    return (head
+            + "\n═══ 2부. 통합타임라인 (전체 이벤트, CSV) ═══\n" + tl_text
+            + "\n═══ 3부. 원본 로그 (DDI 시트별 원본 행, CSV · 원본행 = 엑셀 행 번호) ═══\n" + raw_text
+            + tail)
 
-def _make_messages(info, crit_df, cands, tl):
+
+def _level_line(text, start):
+    first = re.sub(r"[*#`:：\-]", " ", text[start:].lstrip("* \n\r\t").split("\n", 1)[0]).split()
+    return first[0] if first and first[0] in REPORT_LEVELS else ""
+
+
+def check_report_format(text, tl=None):
+    """LLM 보고서 틀 점검. 문제 목록을 돌려준다 (빈 목록 = 통과). 내용은 보지 않고 틀만 본다.
+    - 다섯 제목이 순서대로 있다 / 최종 위험 수준 첫 줄이 Critical·Medium·Low 중 하나
+    - tl 을 주면: 인용한 이벤트ID 가 실제로 있다, 확인 필요 이벤트가 있으면 핵심 우려 사항에 근거 이벤트ID 가 있다"""
+    text = text or ""
+    pos = [text.find(s) for s in REPORT_SECTIONS]
+    problems = [f"섹션 누락: {s}" for s, p in zip(REPORT_SECTIONS, pos) if p < 0]
+    found = [p for p in pos if p >= 0]
+    if found != sorted(found):
+        problems.append("섹션 순서가 다름")
+    if pos[-1] >= 0 and not _level_line(text, pos[-1] + len(REPORT_SECTIONS[-1])):
+        problems.append("최종 위험 수준 첫 줄이 Critical/Medium/Low 가 아님")
+    if tl is not None and "이벤트ID" in tl:
+        bad = sorted(set(_EID_RE.findall(text)) - set(tl["이벤트ID"].astype(str)))
+        if bad:
+            problems.append("로그에 없는 이벤트ID 인용: " + ", ".join(bad[:10]))
+        has_need = "점검결과" in tl and bool((tl["점검결과"].fillna("") == "확인 필요").any())
+        if has_need and pos[1] >= 0:
+            end = min([p for p in pos[2:] if p > pos[1]] or [len(text)])
+            if not _EID_RE.search(text[pos[1]:end]):
+                problems.append("핵심 우려 사항에 근거 이벤트ID 가 없음")
+    return problems
+
+
+def report_level(text):
+    """보고서의 최종 위험 수준 (틀이 맞을 때만, 아니면 '')"""
+    i = (text or "").find(REPORT_SECTIONS[-1])
+    return _level_line(text, i + len(REPORT_SECTIONS[-1])) if i >= 0 else ""
+
+
+LLM_TIMEOUT = 900            # 응답 대기(초). 로컬 모델은 첫 글자까지 오래 걸릴 수 있다 (obi.ini [llm] timeout)
+
+
+def _timeout_msg(cfg):
+    sec = int(cfg.get("timeout") or LLM_TIMEOUT)
+    return (f"'{cfg.get('model', '')}' 응답이 {sec}초 동안 없어 중단했습니다. 모델이 다른 요청을 처리 중이거나 "
+            "프롬프트가 너무 깁니다. obi.ini 의 [llm] timeout 을 늘리거나 max_prompt_chars 를 줄여 보세요.")
+
+
+def _make_messages(prompt):
     return [
         {"role": "system", "content": _SYS},
-        {"role": "user",   "content": build_llm_prompt(info, crit_df, cands, tl)},
+        {"role": "user",   "content": prompt},
     ]
 
 
-def stream_analyze(cfg, info, crit_df, cands, tl):
-    """LLM 스트리밍 제너레이터.
+def stream_analyze(cfg, prompt):
+    """LLM 스트리밍 제너레이터. prompt 는 build_llm_prompt() 결과 (화면 '프롬프트 확인'과 같은 문자열).
 
-    cfg = {"provider": "ollama"|"openai",
-           "model": str, "base_url": str, "api_key": str}
+    cfg = {"provider": "ollama"|"openai", "model": str, "base_url": str, "api_key": str,
+           "temperature": float(선택), "num_ctx": int(선택, Ollama 만)}
 
     Raises:
         ConnectionError: 서버에 연결할 수 없을 때
@@ -411,9 +557,9 @@ def stream_analyze(cfg, info, crit_df, cands, tl):
     """
     provider = cfg.get("provider", "ollama")
     if provider == "ollama":
-        yield from _stream_ollama(cfg, info, crit_df, cands, tl)
+        yield from _stream_ollama(cfg, prompt)
     elif provider == "openai":
-        yield from _stream_openai(cfg, info, crit_df, cands, tl)
+        yield from _stream_openai(cfg, prompt)
     else:
         raise ValueError(f"알 수 없는 provider: {provider}")
 
@@ -421,15 +567,17 @@ def stream_analyze(cfg, info, crit_df, cands, tl):
 # ---------------------------------------------------------------------------
 # Ollama
 # ---------------------------------------------------------------------------
-def _stream_ollama(cfg, info, crit_df, cands, tl):
+def _stream_ollama(cfg, prompt):
     base = cfg.get("base_url", "http://localhost:11434").rstrip("/")
     try:
         resp = requests.post(
             f"{base}/api/chat",
             json={"model": cfg["model"],
-                  "messages": _make_messages(info, crit_df, cands, tl),
-                  "stream": True},
-            stream=True, timeout=300,
+                  "messages": _make_messages(prompt),
+                  "stream": True,
+                  # Ollama 기본 num_ctx(2~4K)로는 원본 로그가 잘려 들어간다
+                  "options": {k: cfg[k] for k in ("num_ctx", "temperature") if cfg.get(k) is not None}},
+            stream=True, timeout=(10, int(cfg.get("timeout") or LLM_TIMEOUT)),
         )
         if resp.status_code == 404:
             raise RuntimeError(
@@ -449,6 +597,8 @@ def _stream_ollama(cfg, info, crit_df, cands, tl):
                 yield chunk
             if obj.get("done"):
                 break
+    except requests.exceptions.Timeout:
+        raise RuntimeError(_timeout_msg(cfg))
     except requests.exceptions.ConnectionError:
         raise ConnectionError(
             f"Ollama 서버({base})에 연결할 수 없습니다. "
@@ -459,7 +609,7 @@ def _stream_ollama(cfg, info, crit_df, cands, tl):
 # ---------------------------------------------------------------------------
 # OpenAI 호환 (OpenAI · Groq · Together · 로컬 OpenAI 호환 서버 등)
 # ---------------------------------------------------------------------------
-def _stream_openai(cfg, info, crit_df, cands, tl):
+def _stream_openai(cfg, prompt):
     base = cfg.get("base_url", "https://api.openai.com/v1").rstrip("/")
     headers = {
         "Content-Type": "application/json",
@@ -470,9 +620,10 @@ def _stream_openai(cfg, info, crit_df, cands, tl):
             f"{base}/chat/completions",
             headers=headers,
             json={"model": cfg["model"],
-                  "messages": _make_messages(info, crit_df, cands, tl),
-                  "stream": True},
-            stream=True, timeout=300,
+                  "messages": _make_messages(prompt),
+                  "stream": True,
+                  **({"temperature": cfg["temperature"]} if cfg.get("temperature") is not None else {})},
+            stream=True, timeout=(10, int(cfg.get("timeout") or LLM_TIMEOUT)),
         )
         if resp.status_code == 401:
             raise RuntimeError("API 키가 올바르지 않습니다.")
@@ -496,5 +647,7 @@ def _stream_openai(cfg, info, crit_df, cands, tl):
             chunk = (obj.get("choices") or [{}])[0].get("delta", {}).get("content", "")
             if chunk:
                 yield chunk
+    except requests.exceptions.Timeout:
+        raise RuntimeError(_timeout_msg(cfg))
     except requests.exceptions.ConnectionError:
         raise ConnectionError(f"API 서버({base})에 연결할 수 없습니다.")

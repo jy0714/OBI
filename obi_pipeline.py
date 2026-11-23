@@ -41,7 +41,9 @@ def analyze_file(src, out_path, info, base_date=None, account=None):
     src 는 파일 경로 또는 read_log() 가 돌려준 workbook (다시 읽지 않음).
     info 는 복사본을 고쳐서 돌려준다(기준일·계정 채움). 원본 dict 는 건드리지 않는다.
     """
-    checks, status, timeline = prep.run(src, out_path, info["퇴직일자"], base_date, account)
+    xls = src if isinstance(src, prep.LogWorkbook) else prep.LogWorkbook(src)
+    checks, status, timeline = prep.run(xls, out_path, info["퇴직일자"], base_date, account)
+    raw = prep.raw_sheets(xls)          # LLM 분석에 원본 로그도 함께 보낸다
     summary = pd.read_excel(out_path, sheet_name="채널요약")
     criteria = pd.read_excel(out_path, sheet_name="기준점검").fillna("")
     cond = pd.read_excel(out_path, sheet_name="분석조건")
@@ -51,7 +53,8 @@ def analyze_file(src, out_path, info, base_date=None, account=None):
     info["기준일"] = str(base_row.iloc[0]).split(" ")[0] if len(base_row) else ""
     accounts = timeline["계정"].replace("", pd.NA).dropna() if "계정" in timeline else pd.Series(dtype=str)
     info["계정"] = accounts.mode().iloc[0] if len(accounts) else ""   # 로그에서 가장 많이 나온 계정
-    return dict(info=info, checks=checks, status=status, summary=summary, timeline=timeline, criteria=criteria)
+    return dict(info=info, checks=checks, status=status, summary=summary, timeline=timeline, criteria=criteria,
+                raw=raw)
 
 
 def size_stats(tl):
@@ -268,7 +271,7 @@ def save(result, *, test=False, sources=None):
     top, n_cands, need = board_summary(result["timeline"])
     return store.save_analysis(result["info"], result["checks"], result["summary"], result["timeline"],
                                result["criteria"], test=test, top_grade=top, need_count=need, sources=sources,
-                               cand_count=n_cands)
+                               cand_count=n_cands, raw=result.get("raw"))
 
 
 def dashboard(tl, summary=None, base_date="", retire_date="", channels=None, need_only=False):

@@ -39,7 +39,7 @@ Development rules:
 - Golden snapshots in `tests/golden/sample/`: `schema.json` (columns = **format**), `excel.json` (exported workbook), `app.json` (after DB round-trip, what the UI shows), `prompt.txt` (LLM prompt). A diff in `schema.json` means the format changed — call it out explicitly.
 - Never `update` golden to make a failing test pass without explaining the diff to the user.
 - `tests/test_scenarios.py` encodes each requirement's 완료 기준 from `OBI_requirements_2026-11-19.md` (one test group per REQ). New requirement → add its scenario there.
-- `tests/test_contracts.py` holds invariants that must survive the LLM swap (candidate columns, 판단 keys = `WEIGHTS`, score = `score_candidate(판단)`, every `확인 필요` event in exactly one candidate). LLM reports must pass `harness.check_report_format()`.
+- `tests/test_contracts.py` holds invariants that must survive the LLM swap (candidate columns, 판단 keys = `WEIGHTS`, score = `score_candidate(판단)`, every `확인 필요` event in exactly one candidate). LLM reports must pass `harness.check_report_format()` (= `obi_ai.check_report_format`, also run on every AI 의견 in the app).
 - Output must not depend on set/dict iteration order or wall-clock time (`test_deterministic_across_processes` runs with two `PYTHONHASHSEED`s).
 - `obi_pipeline.py` is the single headless path used by both `app.py` and the harness — put non-UI logic there, not in `app.py`.
 
@@ -91,6 +91,11 @@ Each factor is rated 높음/중간/낮음 (1.0 / 0.5 / 0.0), summed with `floor(
 `obi_ai.mock_analyze()` is the only function to replace when wiring in a real LLM. It must return a DataFrame with columns: `후보ID`, `등급`, `위험점수`, `유형`, `기간`, `채널`, `건수`, `설명`, `근거이벤트`, `점검항목`, `판단` (dict of factor→level), `근거` (dict of factor→reason string), `구분`.
 
 `mock_insights()` (the 한눈에 보기 summary) should also be replaced; it produces `(lead_text: str, points: list[str])`.
+
+### AI 의견 (LLM free analysis, fixed output frame)
+
+The harness fixes what the **code** produces (candidates, grades, checks). The LLM 'AI 분석' opinion is free analysis: `obi_ai.build_llm_prompt(info, crit, cands, tl, raw, max_chars)` sends 1부 code results (reference only) + 2부 the full 통합타임라인 (CSV) + 3부 the original DDI sheets (`원본로그`, stored at analysis time by `prep.raw_sheets()` → DB `원본로그_json`; old rows have none). Over `max_prompt_chars` rows are picked deterministically: 확인 필요 → 참고 → their raw rows → the rest (newest first), and each table says `전체 N행 중 M행`. Same input → same prompt (golden `prompt.txt`).
+Only the **frame** is fixed: `REPORT_SECTIONS` (5 headings, in order), first line of `5. 최종 위험 수준` = Critical/Medium/Low, cited `E####` must exist, 핵심 우려 사항 must cite an event when there are 확인 필요 events. `stream_analyze(cfg, prompt)` takes the exact prompt shown in the UI. Tuning in `obi.ini`: `[ollama] num_ctx`, `[llm] max_prompt_chars / temperature / timeout`.
 
 ### Check code system
 

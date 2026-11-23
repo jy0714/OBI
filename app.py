@@ -130,13 +130,24 @@ def _ai_cfg():
             "model":    (st.session_state.get("openai_model") or conf["openai_model"]).strip(),
             "base_url": (st.session_state.get("openai_base_url") or conf["openai_base_url"]).strip(),
             "api_key":  (st.session_state.get("openai_api_key") or conf["openai_api_key"]).strip(),
+            "temperature": conf["temperature"],
+            "timeout":  conf["llm_timeout"],
         }
     return {
         "provider": "ollama",
         "model":    st.session_state.get("ollama_model") or "",
         "base_url": conf["ollama_base_url"],
         "api_key":  "",
+        "temperature": conf["temperature"],
+        "num_ctx":  conf["ollama_num_ctx"],
+        "timeout":  conf["llm_timeout"],
     }
+
+
+def llm_prompt(a, crit, cands, tl):
+    """화면 '프롬프트 확인'과 실제 전송에 같은 문자열을 쓴다 (정리 결과 + 통합타임라인 + 원본 로그)"""
+    conf = st.session_state.get("obi_conf") or config.load()
+    return ai.build_llm_prompt(a, crit, cands, tl, a.get("원본로그"), conf["max_prompt_chars"])
 
 
 # ---------------------------------------------------------------------------
@@ -450,18 +461,20 @@ def render_detail(analysis_id, key):
         h1.markdown(f"##### AI 분석 &nbsp;&nbsp; **{provider_label}** · `{cfg['model'] or '모델 없음'}`")
 
         if cfg["provider"] != "ollama":       # REQ-13 외부 프로바이더로 나가는 개인정보 경고
-            st.warning("외부 API 사용 중 · 수신자 주소와 파일명이 외부로 전송됩니다. "
+            st.warning("외부 API 사용 중 · 수신자 주소와 파일명이 외부로 전송됩니다. 원본 로그 행도 함께 전송됩니다. "
                        "전송 내용은 아래 '프롬프트 확인'에서 볼 수 있습니다.", icon="⚠️")
 
-        with st.expander("LLM에 전달되는 프롬프트 확인"):
-            st.code(ai.build_llm_prompt(a, crit, cands, tl), language="text")
+        prompt = llm_prompt(a, crit, cands, tl)
+        with st.expander(f"LLM에 전달되는 프롬프트 확인 · {len(prompt):,}자"
+                         + ("" if a.get("원본로그") else " · 원본 로그 없음(옛 이력)")):
+            st.code(prompt, language="text")
 
         existing = a["AI의견"]
         clicked = h2.button("다시 요청" if existing else "분석 요청", key=f"{key}_llm_run",
                             type="secondary" if existing else "primary", disabled=not cfg["model"])
         if clicked:
             try:
-                result = st.write_stream(ai.stream_analyze(cfg, a, crit, cands, tl))
+                result = st.write_stream(ai.stream_analyze(cfg, prompt))
                 store.save_ai_opinion(analysis_id, result, cfg["provider"], cfg["model"],
                                       st.session_state.get("user", ""))
                 st.rerun()
@@ -472,6 +485,10 @@ def render_detail(analysis_id, key):
         elif existing:
             st.caption(f"{a['AI프로바이더']} · `{a['AI모델']}` · 생성 {a['AI생성일시']} · 요청 {a['AI요청자'] or '-'}"
                        + (f" · 이전 생성: {', '.join(a['AI이전생성일시'])}" if a["AI이전생성일시"] else ""))
+            problems = ai.check_report_format(existing, tl)        # 내용은 자유, 틀만 확인
+            if problems:
+                st.warning("AI 의견이 정해진 형식과 다릅니다 · " + " · ".join(problems)
+                           + " — '다시 요청'으로 새로 받을 수 있습니다.")
             st.markdown(existing)
         if not cfg["model"]:
             st.warning("선택할 수 있는 AI 모델이 없습니다. 왼쪽 사이드바의 AI 분석 설정을 확인하세요.")

@@ -234,7 +234,12 @@ def test_req07_ai_request_saves_to_db(temp_db, sample, monkeypatch):
     """분석 요청 → (가짜 LLM) 스트리밍 → DB 저장 → 다시 요청 시 이전 생성 일시 보존"""
     import obi_ai
     import obi_pipeline as pipeline
-    monkeypatch.setattr(obi_ai, "stream_analyze", lambda *a, **k: iter(["**4. 최종 위험 수준** ", "Medium"]))
+    sent = {}
+
+    def fake_stream(cfg, prompt):
+        sent.update(cfg=cfg, prompt=prompt)
+        return iter(["**5. 최종 위험 수준** ", "Medium"])
+    monkeypatch.setattr(obi_ai, "stream_analyze", fake_stream)
     aid = pipeline.save(sample["result"], test=True)
     at = app()
     at.session_state["current_id"] = aid
@@ -243,6 +248,9 @@ def test_req07_ai_request_saves_to_db(temp_db, sample, monkeypatch):
     assert not at.exception, at.exception
     a = store.get_analysis(aid)
     assert a["AI의견"].endswith("Medium") and a["AI프로바이더"] == "ollama"
+    assert "═══ 3부. 원본 로그" in sent["prompt"] and "[원본 USB로그]" in sent["prompt"]     # 원본 로그도 전송
+    assert sent["cfg"]["num_ctx"] and sent["cfg"]["temperature"] is not None
+    assert any("정해진 형식과 다릅니다" in w.value for w in at.warning)            # 틀이 다르면 알려 준다
     at.button(key="new_llm_run").click().run()                 # 다시 요청
     assert len(store.get_analysis(aid)["AI이전생성일시"]) == 1
 
@@ -360,7 +368,7 @@ def test_req13_external_provider_warning(temp_db, sample):
     assert not any(msg in w.value for w in at.warning)                         # 로컬 Ollama
     a = store.get_analysis(aid)
     cands, _, _ = __import__("obi_pipeline").derive(a["타임라인"])
-    want = obi_ai.build_llm_prompt(a, a["기준점검"], cands, a["타임라인"]).strip()     # st.code 는 끝 줄바꿈을 뗀다
+    want = obi_ai.build_llm_prompt(a, a["기준점검"], cands, a["타임라인"], a["원본로그"]).strip()   # st.code 는 끝 줄바꿈을 뗀다
     assert any(c.value.strip() == want for c in at.code) and "friend@gmail.com(개인메일)" in want
     at.sidebar.selectbox(key="ai_provider").set_value("OpenAI 형식 API").run()
     assert not at.exception, at.exception

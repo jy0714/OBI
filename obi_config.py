@@ -18,6 +18,10 @@ DEFAULTS = {
     "openai_base_url": "https://api.openai.com/v1",
     "openai_model":    "gpt-4o-mini",
     "openai_api_key":  "",
+    "ollama_num_ctx":  32768,      # Ollama 컨텍스트 길이 (기본 2~4K 로는 원본 로그가 잘린다)
+    "max_prompt_chars": 40000,     # 프롬프트 글자 상한 (넘으면 우선순위대로 행을 고름)
+    "temperature":     0.2,        # 낮을수록 같은 입력에 비슷한 답
+    "llm_timeout":     900,        # 응답 대기(초)
 }
 
 
@@ -52,6 +56,14 @@ def load():
     cfg["openai_base_url"] = cp.get("openai", "base_url", fallback=DEFAULTS["openai_base_url"]).strip()
     cfg["openai_model"] = cp.get("openai", "model", fallback=DEFAULTS["openai_model"]).strip()
     cfg["openai_api_key"] = cp.get("openai", "api_key", fallback="").strip()
+    try:
+        cfg["ollama_num_ctx"] = cp.getint("ollama", "num_ctx", fallback=DEFAULTS["ollama_num_ctx"])
+        cfg["max_prompt_chars"] = cp.getint("llm", "max_prompt_chars", fallback=DEFAULTS["max_prompt_chars"])
+        cfg["temperature"] = cp.getfloat("llm", "temperature", fallback=DEFAULTS["temperature"])
+        cfg["llm_timeout"] = cp.getint("llm", "timeout", fallback=DEFAULTS["llm_timeout"])
+    except ValueError as e:
+        cfg["오류"] = f"{path} 의 숫자 설정을 읽을 수 없습니다: {e}"
+        return cfg
 
     if not (len(cfg["password"]) == 4 and cfg["password"].isdigit()):
         cfg["오류"] = f"{path} 의 [auth] password 는 4자리 숫자여야 합니다."

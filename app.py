@@ -449,6 +449,10 @@ def render_detail(analysis_id, key):
         h1, h2 = st.columns([5, 1])
         h1.markdown(f"##### AI 분석 &nbsp;&nbsp; **{provider_label}** · `{cfg['model'] or '모델 없음'}`")
 
+        if cfg["provider"] != "ollama":       # REQ-13 외부 프로바이더로 나가는 개인정보 경고
+            st.warning("외부 API 사용 중 · 수신자 주소와 파일명이 외부로 전송됩니다. "
+                       "전송 내용은 아래 '프롬프트 확인'에서 볼 수 있습니다.", icon="⚠️")
+
         with st.expander("LLM에 전달되는 프롬프트 확인"):
             st.code(ai.build_llm_prompt(a, crit, cands, tl), language="text")
 

@@ -108,6 +108,24 @@ def test_prompt_requests_report_sections(sample):
         assert s in sample["prompt"]
 
 
+def test_prompt_lists_mail_recipients_and_attachments(sample):
+    """REQ-13: 프롬프트에 실린 '확인 필요' 이메일마다 그 줄에 수신자와 첨부 파일명이 있다 (상한까지)"""
+    tl, prompt = sample["tl"], sample["prompt"]
+    need = tl[tl["점검결과"] == "확인 필요"].head(ai.PROMPT_MAX_EVENTS)
+    lines = {ln.split(" | ")[0].strip(): ln for ln in prompt.splitlines() if ln.startswith("  E")}
+    mails = need[need["채널"] == "이메일"]
+    assert len(mails)
+    for _, r in mails.iterrows():
+        line = lines[r["이벤트ID"]]
+        for x in ai.recipients_of(r)[:ai.PROMPT_MAX_RECIPIENTS]:
+            assert x in line, (r["이벤트ID"], x)
+        for f in ai.files_of(r)[:ai.PROMPT_MAX_FILES]:
+            assert f in line, (r["이벤트ID"], f)
+    for _, r in need[need["채널"].isin(ai.FILE_CHANNELS)].iterrows():
+        for f in ai.files_of(r)[:ai.PROMPT_MAX_FILES]:
+            assert f in lines[r["이벤트ID"]], (r["이벤트ID"], f)
+
+
 def test_report_format_checker():
     ok = "**1. 종합 위험 평가**\n..\n**2. 핵심 우려 사항**\n..\n**3. 추가 확인 필요 사항**\n- a\n**4. 최종 위험 수준**\nCritical: 근거"
     assert harness.check_report_format(ok) == []

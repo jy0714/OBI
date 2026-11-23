@@ -268,6 +268,55 @@ _SYS = (
 )
 
 
+PROMPT_MAX_EVENTS = 30       # 프롬프트에 싣는 확인 필요 이벤트 수
+PROMPT_MAX_RECIPIENTS = 5    # 이벤트 한 줄에 적는 수신자 수 (넘으면 "외 N명")
+PROMPT_MAX_FILES = 5         # 이벤트 한 줄에 적는 파일 수 (넘으면 "외 N개")
+FILE_CHANNELS = ("웹 업로드", "USB", "USB(DLP)", "출력")
+
+
+def _limited(items, cap, unit):
+    return ", ".join(items[:cap]) + (f" 외 {len(items) - cap}{unit}" if len(items) > cap else "")
+
+
+def recipients_of(r):
+    """이벤트 행 → 수신자 주소 목록"""
+    return [x.strip() for x in str(_get(r, "수신자") or "").split(",") if x.strip()]
+
+
+def files_of(r):
+    """이벤트 행 → 파일명(경로 제외) 목록"""
+    return [prep.file_basename(f) for f in prep.split_files(_get(r, "파일목록"))]
+
+
+def _get(r, col):
+    v = r.get(col, "") if hasattr(r, "get") else getattr(r, col, "")
+    return "" if v is None or (isinstance(v, float) and math.isnan(v)) else v
+
+
+def event_line(r):
+    """프롬프트 '확인 필요 이벤트 목록'의 한 줄 (REQ-13). 이메일은 제목·수신자(사내/개인메일/타사)·첨부·용량,
+    웹 업로드·USB·출력은 파일명을 함께 적는다."""
+    ch = _get(r, "채널")
+    parts = [str(_get(r, "이벤트ID")), str(_get(r, "시간")), f"{ch} {_get(r, '행위')}"]
+    files = files_of(r)
+    if ch == "이메일":
+        rcpts = [f"{x}({k})" if (k := crit.recipient_kind(x)) else x for x in recipients_of(r)]
+        parts.append(str(_get(r, "대상"))[:60] or "제목: (없음)")
+        parts.append("수신: " + (_limited(rcpts, PROMPT_MAX_RECIPIENTS, "명") or "(없음)"))
+        parts.append(f"첨부 {len(files)}개" + (": " + _limited(files, PROMPT_MAX_FILES, "개") if files else ""))
+        size = crit.fmt_size(pd.to_numeric(_get(r, "용량_bytes"), errors="coerce"))
+        if size:
+            parts.append(f"용량 {size}")
+    else:
+        parts.append(f"대상: {str(_get(r, '대상'))[:60]}")
+        if ch in FILE_CHANNELS and files:
+            parts.append("파일: " + _limited(files, PROMPT_MAX_FILES, "개"))
+    parts.append(f"사유: {_get(r, '점검사유')}")
+    if "R2" in crit.codes_of(_get(r, "점검사유")):
+        parts.append("사내 동반")
+    return "  " + " | ".join(parts)
+
+
 def build_llm_prompt(info, crit_df, cands, tl):
     """분석 데이터를 LLM 프롬프트 문자열로 변환한다."""
     need = tl[tl["점검결과"].fillna("") == "확인 필요"] if "점검결과" in tl.columns else tl.iloc[0:0]
@@ -296,18 +345,11 @@ def build_llm_prompt(info, crit_df, cands, tl):
     else:
         cand_text = "  (확인 필요 행위 없음)"
 
-    # 확인 필요 이벤트 (최대 30건)
+    # 확인 필요 이벤트 (최대 PROMPT_MAX_EVENTS 건)
     if not need.empty:
-        ev_lines = [
-            f"  {getattr(r,'이벤트ID','')} | {getattr(r,'시간','')} | "
-            f"{getattr(r,'채널','')} {getattr(r,'행위','')} | "
-            f"대상: {str(getattr(r,'대상',''))[:60]} | "
-            f"사유: {getattr(r,'점검사유','')}"
-            + (" | 사내 동반" if "R2" in crit.codes_of(getattr(r, '점검사유', '')) else "")
-            for r in need.head(30).itertuples()
-        ]
-        if len(need) > 30:
-            ev_lines.append(f"  ... 외 {len(need) - 30}건")
+        ev_lines = [event_line(r) for _, r in need.head(PROMPT_MAX_EVENTS).iterrows()]
+        if len(need) > PROMPT_MAX_EVENTS:
+            ev_lines.append(f"  ... 외 {len(need) - PROMPT_MAX_EVENTS}건")
         event_text = "\n".join(ev_lines)
     else:
         event_text = "  (없음)"
@@ -327,7 +369,7 @@ DLP·웹 필터·USB·출력 모니터링 데이터를 분석하여 내부 자�
 ═══ 위험 후보 사건 (코드 분류) ═══
 {cand_text}
 
-═══ 확인 필요 이벤트 목록 (최대 30건) ═══
+═══ 확인 필요 이벤트 목록 (최대 {PROMPT_MAX_EVENTS}건) ═══
 {event_text}
 
 ═══ 판단 기준 ═══
@@ -340,7 +382,7 @@ DLP·웹 필터·USB·출력 모니터링 데이터를 분석하여 내부 자�
 행위 패턴과 전체 위험 수준을 2~3 문단으로 서술하세요.
 
 **2. 핵심 우려 사항**
-가장 주의 깊게 검토해야 할 사건·패턴과 그 이유를 서술하세요.
+가장 주의 깊게 검토해야 할 사건·패턴과 그 이유를 서술하세요. 근거가 된 파일명과 수신자를 함께 적으세요.
 
 **3. 추가 확인 필요 사항**
 인터뷰 또는 추가 조사로 확인해야 할 사항을 목록으로 작성하세요.

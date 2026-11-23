@@ -415,3 +415,33 @@ def test_req16_chart_selectable(sample):
     spec = c.daily_activity(sample["dashboard"], selectable=True).to_dict()
     assert c.PICK in str(spec) and "일자" in str(spec)
     assert "'name': 'pick'" not in str(c.daily_activity(sample["dashboard"]).to_dict())   # 기본은 선택 없음
+
+
+# --- REQ-13 LLM 프롬프트에 메일·첨부·수신자 정보 ----------------------------------
+def test_req13_prompt_has_recipient_and_attachment_on_one_line(sample):
+    line = [ln for ln in sample["prompt"].splitlines() if "friend@gmail.com" in ln and ln.startswith("  E")]
+    assert len(line) == 1
+    assert "임직원 연락처.xlsx" in line[0] and "friend@gmail.com(개인메일)" in line[0]
+    assert "근거가 된 파일명과 수신자를 함께 적으세요" in sample["prompt"]
+
+
+def test_req13_event_line_caps_and_kinds():
+    import pandas as pd
+    import obi_ai as ai
+    rcpts = [f"u{i}@gmail.com" for i in range(ai.PROMPT_MAX_RECIPIENTS + 2)] + ["a@doosan.com", "b@vendor.co.kr"]
+    files = "\n".join(f"C:\\docs\\f{i}.xlsx" for i in range(ai.PROMPT_MAX_FILES + 3))
+    r = pd.Series({"이벤트ID": "E1", "시간": "t", "채널": "이메일", "행위": "외부 메일 발송", "대상": "제목: x",
+                   "수신자": ", ".join(rcpts), "파일목록": files, "용량_bytes": 2048, "점검사유": "B2 개인메일"})
+    line = ai.event_line(r)
+    assert "u0@gmail.com(개인메일)" in line and f"외 {len(rcpts) - ai.PROMPT_MAX_RECIPIENTS}명" in line
+    assert "a@doosan.com" not in line                                              # 상한 밖
+    assert f"첨부 {ai.PROMPT_MAX_FILES + 3}개: f0.xlsx" in line and "외 3개" in line and "docs" not in line
+    assert "용량 2KB" in line
+    import obi_criteria as crit
+    assert [crit.recipient_kind(x) for x in ("a@hq.doosan.com", "x@naver.com", "b@vendor.co.kr", "")] == \
+        ["사내", "개인메일", "타사", ""]
+    usb = pd.Series({"이벤트ID": "E2", "시간": "t", "채널": "USB", "행위": "USB Write", "대상": "E:\\a.zip",
+                     "파일목록": "E:\\a.zip", "점검사유": "B5"})
+    assert "파일: a.zip" in ai.event_line(usb)
+    web = pd.Series({"이벤트ID": "E3", "시간": "t", "채널": "웹", "행위": "웹 접속", "대상": "https://x", "점검사유": "B4"})
+    assert "파일:" not in ai.event_line(web) and "수신:" not in ai.event_line(web)

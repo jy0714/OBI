@@ -139,6 +139,18 @@ def internal_companions(rcpts, sender=""):
             and not (COMPANION_EXCLUDE_SENDER and me and x == me)]
 
 
+def recipient_kind(addr):
+    """수신자 구분 (REQ-13 프롬프트용): '사내' / '개인메일' / '타사' (도메인을 모르면 '')"""
+    dom = _domain(addr)
+    if not dom:
+        return ""
+    if _match_domain(dom, INTERNAL_DOMAINS):
+        return "사내"
+    if _match_domain(dom, PERSONAL_MAIL_DOMAINS):
+        return "개인메일"
+    return "타사"
+
+
 def fmt_mb(n_bytes):
     return f"{n_bytes / MB:,.1f}MB"
 

@@ -347,3 +347,21 @@ def test_req16_dashboard_empty_item(temp_db, sample):
     assert not at.exception, at.exception
     assert any("고른 항목의 이벤트가 없습니다" in i.value for i in at.info)
     assert any("해당하는 이벤트가 없습니다" in c.value for c in at.caption)
+
+
+def test_req13_external_provider_warning(temp_db, sample):
+    """외부 API 선택 시에만 '수신자 주소와 파일명이 외부로 전송됩니다' 경고. 프롬프트 확인에 같은 내용"""
+    import obi_ai
+    aid = store.save_analysis(*(sample["result"][k] for k in ("info", "checks", "summary", "timeline", "criteria")))
+    at = app()
+    at.session_state["current_id"] = aid
+    at.run()
+    msg = "수신자 주소와 파일명이 외부로 전송됩니다"
+    assert not any(msg in w.value for w in at.warning)                         # 로컬 Ollama
+    a = store.get_analysis(aid)
+    cands, _, _ = __import__("obi_pipeline").derive(a["타임라인"])
+    want = obi_ai.build_llm_prompt(a, a["기준점검"], cands, a["타임라인"]).strip()     # st.code 는 끝 줄바꿈을 뗀다
+    assert any(c.value.strip() == want for c in at.code) and "friend@gmail.com(개인메일)" in want
+    at.sidebar.selectbox(key="ai_provider").set_value("OpenAI 형식 API").run()
+    assert not at.exception, at.exception
+    assert any(msg in w.value for w in at.warning)

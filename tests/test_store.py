@@ -33,6 +33,7 @@ def test_old_db_opens_and_lists(db):
     store.init_db()
     df = store.list_analyses()
     assert df.loc[0, "이름"] == "옛이력" and df.loc[0, "최고등급"] == "" and df.loc[0, "테스트여부"] == 0
+    assert pipeline.board(df)["검토 후보 건수"].isna().all()       # REQ-15 옛 이력은 빈칸
     a = store.get_analysis(int(df.loc[0, "id"]))
     assert a["AI의견"] == "" and a["인적사항출처"] == {} and a["기준점검"].empty
     with sqlite3.connect(db) as con:
@@ -46,6 +47,7 @@ def test_save_sets_board_values_and_delete_rules(db, sample):
     df = store.list_analyses().set_index("id")
     assert df.loc[real, "최고등급"] == sample["cands"]["등급"].iloc[0]
     assert df.loc[real, "확인필요건수"] == int((sample["tl"]["점검결과"] == "확인 필요").sum())
+    assert df.loc[real, "검토후보건수"] == len(sample["cands"])                 # REQ-15
     assert df.loc[test, "테스트여부"] == 1
 
     with pytest.raises(PermissionError):

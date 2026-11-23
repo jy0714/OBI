@@ -209,7 +209,7 @@ def pledge_status(rec):
     return "해당 없음"
 
 
-BOARD_COLUMNS = ["이력#", "분석일시", "회사", "이름", "직급", "부서", "퇴직일자", "최고 등급", "확인 필요 건수",
+BOARD_COLUMNS = ["이력#", "분석일시", "회사", "이름", "직급", "부서", "퇴직일자", "최고 등급", "검토 후보 건수",
                  "검토 상태", "검토자", "입력 완료", "서약서", "테스트"]
 NO_GRADE = "(없음)"     # 옛 이력 등 등급이 저장되지 않은 건
 
@@ -241,7 +241,8 @@ def board(df, q="", companies=None, states=None, grades=None, date_from=None, da
     out = pd.DataFrame({
         "이력#": v["id"], "분석일시": v["분석일시"], "회사": v["회사"], "이름": v["이름"], "직급": v["직급"],
         "부서": v["부서"], "퇴직일자": v["퇴직일자"], "최고 등급": v["최고등급"],
-        "확인 필요 건수": v["확인필요건수"], "검토 상태": v["검토상태"], "검토자": v["검토자"],
+        "검토 후보 건수": pd.to_numeric(v["검토후보건수"], errors="coerce").astype("Int64"),   # 옛 이력(NULL)은 빈칸 (REQ-15)
+        "검토 상태": v["검토상태"], "검토자": v["검토자"],
         "입력 완료": ["-" if r.테스트여부 else ("입력 필요" if review_missing(r) else "완료") for r in v.itertuples()],
         "서약서": [pledge_status(r) for r in v.itertuples()],
         "테스트": v["테스트여부"].map({1: "TEST", 0: ""}),
@@ -250,18 +251,20 @@ def board(df, q="", companies=None, states=None, grades=None, date_from=None, da
 
 
 def board_summary(tl):
-    """게시판 목록용 값 (REQ-06): (최고 등급, 확인 필요 건수). 저장할 때 같이 넣는다."""
+    """게시판 목록용 값 (REQ-06·15): (최고 등급, 검토 후보 건수, 확인 필요 행위 건수). 저장할 때 같이 넣는다.
+    확인 필요 행위 건수는 화면에 쓰지 않지만 옛 DB 컬럼(확인필요건수)을 계속 채운다."""
     cands, _, _ = derive(tl)
     need = int((tl["점검결과"].fillna("") == "확인 필요").sum()) if "점검결과" in tl else 0
-    return (cands["등급"].iloc[0] if len(cands) else ""), need
+    return (cands["등급"].iloc[0] if len(cands) else ""), len(cands), need
 
 
 def save(result, *, test=False, sources=None):
     """analyze_file() 결과를 저장하고 이력 id 를 돌려준다 (앱·하네스 공통)."""
     import obi_store as store
-    top, need = board_summary(result["timeline"])
+    top, n_cands, need = board_summary(result["timeline"])
     return store.save_analysis(result["info"], result["checks"], result["summary"], result["timeline"],
-                               result["criteria"], test=test, top_grade=top, need_count=need, sources=sources)
+                               result["criteria"], test=test, top_grade=top, need_count=need, sources=sources,
+                               cand_count=n_cands)
 
 
 def dashboard(tl, summary=None, base_date="", retire_date=""):

@@ -29,7 +29,6 @@ def build_report(a, requester="", now=None):
     cands, lead, points = pipeline.derive(tl)
     files = pipeline.key_files(tl, cands)
     pmail = pipeline.personal_mail(tl)
-    need = int((tl["점검결과"].fillna("") == "확인 필요").sum()) if "점검결과" in tl else 0
 
     rows = [
         ("대상자", f"{a['이름']} · {a['회사']} {a['부서']} {a['직급']}".strip()),
@@ -37,7 +36,7 @@ def build_report(a, requester="", now=None):
         ("퇴직(예정)일", a["퇴직일자"]), ("로그 기준일", a["기준일"]),
         ("이력", f"#{a['id']} · 분석 {a['분석일시']} · {'Test' if a.get('테스트여부') else '정식'}"),
         ("최고 등급", cands["등급"].iloc[0] if len(cands) else "-"),
-        ("검토 후보", f"{len(cands)}건"), ("확인 필요 행위", f"{need}건"),
+        ("검토 후보", f"{len(cands)}건"),
         ("개인메일 발송", f"{len(pmail)}건 (첨부 {int((pmail['첨부 수'] > 0).sum())}건)"),
         ("주요 검토 파일", f"{len(files)}개"),
         ("로그 검증", a["검증상태"]),

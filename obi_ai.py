@@ -209,12 +209,12 @@ def mock_insights(tl, cands):
     channels = need["채널"].value_counts()
     points = []
 
-    lead = (f"확인 필요 행위 {len(need)}건이 {len(cands)}개 사건으로 묶였고, "
+    lead = (f"검토 후보 {len(cands)}건(행위 {len(need)}건을 묶음)이 나왔고, "
             f"가장 높은 후보는 '{top.유형}' (등급 {top.등급})입니다.")
 
     if len(recent):
         share = round(len(recent) / max(len(need), 1) * 100)
-        points.append(f"확인 필요 행위의 {share}%({len(recent)}건)가 **최근 30일**에 몰려 있습니다.")
+        points.append(f"검토 후보에 묶인 행위의 {share}%({len(recent)}건)가 **최근 30일**에 몰려 있습니다.")
     if len(channels):
         points.append("채널별로는 " + ", ".join(f"{c} {n}건" for c, n in channels.head(3).items()) + " 순입니다.")
     off = need[need["업무시간외"] == "Y"]

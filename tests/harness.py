@@ -121,7 +121,7 @@ def render(x):
     a, tl, crit, cands, excel = x["analysis"], x["tl"], x["crit"], x["cands"], x["excel"]
     lead, points, prompt = x["lead"], x["points"], x["prompt"]
     stored_info = {k: a[k] for k in ("회사", "이름", "직급", "부서", "퇴직일자", "기준일", "계정",
-                                     "원본파일명", "이벤트수", "검증상태", "테스트여부", "최고등급", "확인필요건수")}
+                                     "원본파일명", "이벤트수", "검증상태", "테스트여부", "최고등급", "확인필요건수", "검토후보건수")}
     app = {
         "info": stored_info,
         "검증결과": _plain(a["검증결과"]),

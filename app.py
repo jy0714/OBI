@@ -289,13 +289,13 @@ def render_detail(analysis_id, key):
         st.warning("**입력 필요** · 정식 이력은 검토 입력을 마쳐야 합니다 (리포트 생성 불가): " + ", ".join(missing))
 
     pmail = pipeline.personal_mail(tl)
-    m = st.columns(6)
-    m[0].metric("검토 후보", f"{len(cands)}건")
+    m = st.columns(5)
+    # 검토는 사건(검토 후보) 단위 — 행위 건수는 보조 설명으로만 (REQ-15)
+    m[0].metric("검토 후보", f"{len(cands)}건", help=f"확인 필요 행위 {len(need)}건을 사건 단위로 묶음")
     m[1].metric("최고 등급", top_grade)
-    m[2].metric("확인 필요 행위", f"{len(need)}건")
-    m[3].metric("개인메일 발송", f"{len(pmail)}건 (첨부 {int((pmail['첨부 수'] > 0).sum())}건)")
-    m[4].metric("참고 관찰", f"{len(ref)}건")
-    m[5].metric("전체 이벤트", f"{a['이벤트수']}건")
+    m[2].metric("개인메일 발송", f"{len(pmail)}건 (첨부 {int((pmail['첨부 수'] > 0).sum())}건)")
+    m[3].metric("참고 관찰", f"{len(ref)}건")
+    m[4].metric("전체 이벤트", f"{a['이벤트수']}건")
 
     if a["검증상태"] != "정상":
         st.error("로그 검증에서 확인이 필요한 항목이 있습니다. '기준 점검' 탭의 검증 상세를 먼저 확인하세요.")
@@ -312,7 +312,7 @@ def render_detail(analysis_id, key):
     with st.container(border=True):
         st.markdown(f"##### 주요 검토 파일 · {len(files)}개")
         if files.empty:
-            st.caption("확인 필요 행위에 등장한 파일이 없습니다.")
+            st.caption("검토 후보에 등장한 파일이 없습니다.")
         else:
             selectable_table(files, tl, f"{key}_files", "근거 이벤트ID", pipeline.KEY_FILE_VIEW)
 
@@ -334,7 +334,7 @@ def render_detail(analysis_id, key):
     # ---------------- 검토 후보 ----------------
     with t_ai:
         if cands.empty:
-            st.info("확인 필요 행위가 없어 후보가 만들어지지 않았습니다.")
+            st.info("확인이 필요한 행위가 없어 검토 후보가 없습니다.")
         else:
             bands = [(g, cands[cands["등급"] == g]) for g in ai.GRADES]
             tabs = st.tabs([f"{GRADE_ICON[name]} {name} {len(df)}" for name, df in bands])

@@ -90,6 +90,9 @@ def test_detail_renders_sample(temp_db, sample):
     assert metrics["전체 이벤트"] == f"{len(sample['tl'])}건"
     # REQ-04: 숫자 점수 대신 등급
     assert metrics["최고 등급"] == sample["cands"]["등급"].iloc[0]
+    assert "확인 필요 행위" not in metrics                                     # REQ-15 지표는 '검토 후보' 하나
+    n_need = int((sample["tl"]["점검결과"] == "확인 필요").sum())
+    assert next(m for m in at.metric if m.label == "검토 후보").help == f"확인 필요 행위 {n_need}건을 사건 단위로 묶음"
     assert not any("점수" in label for label in metrics)
     shown = " ".join(str(m.value) for m in at.markdown) + " ".join(str(c.value) for c in at.caption)
     assert "점수" not in shown

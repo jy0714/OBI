@@ -338,3 +338,18 @@ def test_req17_report_sheets_without_event_id(sample):
         assert not any("이벤트ID" in c for c in sheets[name].columns), name
     assert "이벤트ID" in sheets["통합타임라인"].columns                          # 타임라인 시트는 유지
     assert len(sheets["주요 검토 파일"]) == len(sample["key_files"])
+
+
+# --- REQ-15 '검토 후보'만 표시 ('확인 필요 행위' 지표 삭제) -------------------------
+def test_req15_one_indicator_board_and_report(tmp_path, monkeypatch, sample):
+    import obi_pipeline as p
+    import obi_report as report
+    import obi_store as store
+    monkeypatch.setattr(store, "DB_PATH", str(tmp_path / "b.db"))
+    store.init_db()
+    aid = p.save(sample["result"])
+    assert "확인 필요 건수" not in p.BOARD_COLUMNS
+    assert p.board(store.list_analyses()).set_index("이력#").loc[aid, "검토 후보 건수"] == len(sample["cands"])
+    items = report.build_report(store.get_analysis(aid), "t", now="-")["요약"]["항목"].tolist()
+    assert "검토 후보" in items and "확인 필요 행위" not in items
+    assert "확인 필요 행위" not in sample["lead"] and "검토 후보" in sample["lead"]

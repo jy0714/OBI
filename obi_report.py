@@ -86,6 +86,7 @@ def to_xlsx(sheets):
             cell.font = Font(bold=True)
             cell.fill = PatternFill("solid", fgColor="E3E8EF")
         ws.freeze_panes = "A2"
+    pipeline.prep.formulas_as_text(wb)        # 검토 의견·로그의 '=...' 가 엑셀에서 수식으로 실행되지 않게
     summary = wb["요약"]
     summary.column_dimensions["A"].width = 22
     summary.column_dimensions["B"].width = 110

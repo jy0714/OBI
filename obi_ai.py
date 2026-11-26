@@ -545,6 +545,25 @@ def _make_messages(prompt):
     ]
 
 
+def endpoint_key(url):
+    """API 주소 비교용: 앞뒤 공백과 끝 '/' 만 무시한다. 호스트·경로·포트가 조금이라도 다르면 다른 주소"""
+    return (url or "").strip().rstrip("/")
+
+
+def pick_api_key(base_url, session_keys, conf_base_url, conf_key):
+    """보낼 API 키. 화면에서 그 주소에 직접 입력한 키 → 없으면 obi.ini 주소와 같을 때만 obi.ini 키 → 없으면 ""
+    (주소만 바꿔서 저장된 키가 다른 서버로 가는 일이 없도록 키는 항상 주소에 묶는다)"""
+    url = endpoint_key(base_url)
+    if not url:
+        return ""
+    typed = ((session_keys or {}).get(url) or "").strip()
+    if typed:
+        return typed
+    if url == endpoint_key(conf_base_url):
+        return (conf_key or "").strip()
+    return ""
+
+
 def stream_analyze(cfg, prompt):
     """LLM 스트리밍 제너레이터. prompt 는 build_llm_prompt() 결과 (화면 '프롬프트 확인'과 같은 문자열).
 
@@ -611,10 +630,10 @@ def _stream_ollama(cfg, prompt):
 # ---------------------------------------------------------------------------
 def _stream_openai(cfg, prompt):
     base = cfg.get("base_url", "https://api.openai.com/v1").rstrip("/")
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {cfg.get('api_key', '')}",
-    }
+    headers = {"Content-Type": "application/json"}
+    key = (cfg.get("api_key") or "").strip()
+    if key:                     # 키 없는 로컬 OpenAI 호환 서버는 Authorization 없이
+        headers["Authorization"] = f"Bearer {key}"
     try:
         resp = requests.post(
             f"{base}/chat/completions",

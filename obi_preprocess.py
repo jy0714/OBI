@@ -148,6 +148,9 @@ def file_key(name):
     return s if len(s) >= 4 else ""   # 너무 짧은 이름은 오탐 연결 방지
 
 
+MSO_AUTOMATION_SECURITY_FORCE_DISABLE = 3    # Excel COM: 열리는 파일의 매크로를 모두 끔
+
+
 class LogWorkbook:
     """로그 엑셀 읽기. 일반 파일은 pandas로, 암호화(DRM·민감도 레이블) 파일은 PC의 엑셀을 통해 읽는다."""
 
@@ -192,10 +195,12 @@ class LogWorkbook:
                 "① Excel이 설치된 PC에서 앱을 실행하거나\n"
                 "② 파일을 Excel에서 직접 열어 '다른 이름으로 저장 → xlsx'로 저장한 뒤 다시 업로드하세요."
             )
-        excel.Visible = False
-        excel.DisplayAlerts = False
         wb = None
         try:
+            # 파일을 열기 전에 매크로를 끈다. Visible/DisplayAlerts/UpdateLinks 만으로는 매크로가 꺼지지 않는다
+            excel.AutomationSecurity = MSO_AUTOMATION_SECURITY_FORCE_DISABLE
+            excel.Visible = False
+            excel.DisplayAlerts = False
             wb = excel.Workbooks.Open(self.path, UpdateLinks=0, ReadOnly=True)
             for ws in wb.Worksheets:
                 used = ws.UsedRange
@@ -212,10 +217,14 @@ class LogWorkbook:
                 rows = [[None] * width for _ in range(r0)] + [[None] * c0 + r for r in rows]
                 self.sheets[ws.Name] = pd.DataFrame(rows)
         finally:
-            if wb is not None:
-                wb.Close(SaveChanges=False)
-            excel.Quit()
-            pythoncom.CoUninitialize()
+            try:
+                if wb is not None:
+                    wb.Close(SaveChanges=False)
+            finally:
+                try:
+                    excel.Quit()
+                finally:
+                    pythoncom.CoUninitialize()
 
 
 def find_sheet(xls, prefix):
@@ -667,6 +676,35 @@ def run(path_in, path_out, retire_date, base_date=None, person_account=None):
     return checks, status, tl_out
 
 
+def formulas_as_text(wb):
+    """XLSX 저장 전: '=' 로 시작해 수식으로 들어간 셀을 같은 글자의 일반 텍스트로 바꾼다.
+    OBI 출력에는 계산식이 없으므로 수식 셀 = 로그·입력에서 온 문자열. 숫자·날짜·빈 셀은 건드리지 않는다.
+    (pandas → openpyxl 은 '=...' 문자열을 수식으로 저장한다 → 엑셀에서 열면 실행됨)"""
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for cell in row:
+                if cell.data_type == "f":
+                    text = cell.value if isinstance(cell.value, str) else str(getattr(cell.value, "text", cell.value))
+                    cell.value = None
+                    cell.value = text           # 다시 넣으면 '=' 때문에 또 수식이 되므로 형식을 직접 문자열로
+                    cell.data_type = "s"
+    return wb
+
+
+def sheets_to_xlsx(sheets):
+    """{시트명: DataFrame} → XLSX bytes (수식 없이). 이력 목록 내보내기 등 서식이 없는 출력용"""
+    import io
+    from openpyxl import load_workbook
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as w:
+        for name, df in sheets.items():
+            df.to_excel(w, sheet_name=name[:31], index=False)
+    wb = formulas_as_text(load_workbook(io.BytesIO(buf.getvalue())))
+    out = io.BytesIO()
+    wb.save(out)
+    return out.getvalue()
+
+
 def style_workbook(path):
     from openpyxl import load_workbook
     from openpyxl.styles import Alignment, Font, PatternFill
@@ -691,6 +729,7 @@ def style_workbook(path):
             for r in range(2, ws.max_row + 1):
                 ws.cell(r, 2).number_format = "yyyy-mm-dd hh:mm:ss"
         ws.freeze_panes = "A2"
+    formulas_as_text(wb)
     wb.save(path)
 
 

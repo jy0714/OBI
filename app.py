@@ -3,7 +3,7 @@ OBI (Offboarding Inspector) 화면 - 1차 버전 (AI 분석 연동 전)
 
 실행: streamlit run app.py
 """
-import io
+import html
 import os
 import tempfile
 import time
@@ -65,9 +65,16 @@ def top_bar(tag):
       <div class="obi-tag">{tag}</div></div>""", unsafe_allow_html=True)
 
 
+def esc(v):
+    """HTML 레이아웃(unsafe_allow_html)에 넣는 동적 값은 모두 여기를 거친다 (정적 태그·CSS 와 분리).
+    한 번만: 호출하는 쪽은 원문을 넘기고, 이미 esc 한 값을 다시 넘기지 않는다"""
+    return html.escape("" if v is None else str(v), quote=True)
+
+
 def chip(text, band):
+    """text 는 원문 (여기서 이스케이프). band 는 BAND_COLOR 의 키로만 색을 고른다"""
     bg, fg = BAND_COLOR.get(band, BAND_COLOR["Low"])
-    return f'<span class="obi-chip" style="background:{bg};color:{fg}">{text}</span>'
+    return f'<span class="obi-chip" style="background:{bg};color:{fg}">{esc(text)}</span>'
 
 
 COMPANIES = ["DBI", "DBKR"]
@@ -82,11 +89,7 @@ TIMELINE_BASIC = ["이벤트ID", "시간", "점검결과", "점검사유", "채�
 # 공통
 # ---------------------------------------------------------------------------
 def to_excel_bytes(sheets: dict) -> bytes:
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as w:
-        for name, df in sheets.items():
-            df.to_excel(w, sheet_name=name[:31], index=False)
-    return buf.getvalue()
+    return pipeline.prep.sheets_to_xlsx(sheets)       # '=...' 입력값은 수식이 아닌 글자로
 
 
 def col_is(tl, col, value="Y"):
@@ -119,17 +122,37 @@ def run_analysis(xls, info, base_date, test=False, sources=None):
 # AI 프로바이더 설정 읽기
 # ---------------------------------------------------------------------------
 OLLAMA_LABEL, OPENAI_LABEL = "Ollama (로컬)", "OpenAI 형식 API"
+OPENAI_KEYS = "openai_keys"     # {주소: 화면에서 그 주소에 입력한 키} — 키는 입력할 때의 주소에만 쓴다
+
+
+def _on_openai_url_change():
+    """주소를 바꾸면 키 칸을 그 주소에 입력해 둔 키(없으면 빈칸)로 바꾼다. 이전 주소의 키는 따라가지 않는다"""
+    keys = st.session_state.get(OPENAI_KEYS) or {}
+    st.session_state["openai_api_key"] = keys.get(ai.endpoint_key(st.session_state.get("openai_base_url")), "")
+
+
+def _on_openai_key_change():
+    keys = dict(st.session_state.get(OPENAI_KEYS) or {})
+    url = ai.endpoint_key(st.session_state.get("openai_base_url"))
+    key = (st.session_state.get("openai_api_key") or "").strip()
+    if key:
+        keys[url] = key
+    else:
+        keys.pop(url, None)
+    st.session_state[OPENAI_KEYS] = keys
 
 
 def _ai_cfg():
     """사이드바 선택 + obi.ini 값 → stream_analyze 용 cfg. 고를 모델이 없으면 model = "" """
     conf = st.session_state.get("obi_conf") or config.load()
     if st.session_state.get("ai_provider", OLLAMA_LABEL) == OPENAI_LABEL:
+        base = (st.session_state.get("openai_base_url") or conf["openai_base_url"]).strip()
         return {
             "provider": "openai",
             "model":    (st.session_state.get("openai_model") or conf["openai_model"]).strip(),
-            "base_url": (st.session_state.get("openai_base_url") or conf["openai_base_url"]).strip(),
-            "api_key":  (st.session_state.get("openai_api_key") or conf["openai_api_key"]).strip(),
+            "base_url": base,
+            "api_key":  ai.pick_api_key(base, st.session_state.get(OPENAI_KEYS),
+                                        conf["openai_base_url"], conf["openai_api_key"]),
             "temperature": conf["temperature"],
             "timeout":  conf["llm_timeout"],
         }
@@ -307,8 +330,8 @@ def render_pledge(a, key):
 def candidate_card(r, tl, key):
     with st.container(border=True):
         st.markdown(chip(f"{GRADE_ICON.get(r.등급, '')} {r.등급}", r.등급) +
-                    f'<span class="obi-card-title">{r.유형}</span>'
-                    f'<div class="obi-card-meta">{r.기간} · {r.건수}건</div>',
+                    f'<span class="obi-card-title">{esc(r.유형)}</span>'
+                    f'<div class="obi-card-meta">{esc(r.기간)} · {esc(r.건수)}건</div>',
                     unsafe_allow_html=True)
         st.write(r.설명)
         with st.expander("판단 근거와 원본 로그"):
@@ -334,11 +357,11 @@ def render_detail(analysis_id, key):
 
     # ---------------- 헤더 ----------------
     h1, h2 = st.columns([4, 1])
-    h1.markdown(f"<div class='obi-card-title' style='font-size:20px'>{a['이름']} · {a['회사']} {a['부서']}"
-                f" · 퇴직일 {a['퇴직일자']}</div>"
-                f"<div class='obi-card-meta'>이력 #{a['id']} · 분석 {a['분석일시']} · 로그 기준일 {a['기준일']}"
-                f" · 계정 {a['계정']} · 로그 검증 {a['검증상태']}"
-                + (" · 인적 사항 " + " ".join(f"{k}({v})" for k, v in src.items())
+    h1.markdown(f"<div class='obi-card-title' style='font-size:20px'>{esc(a['이름'])} · {esc(a['회사'])} "
+                f"{esc(a['부서'])} · 퇴직일 {esc(a['퇴직일자'])}</div>"
+                f"<div class='obi-card-meta'>이력 #{esc(a['id'])} · 분석 {esc(a['분석일시'])} · 로그 기준일 {esc(a['기준일'])}"
+                f" · 계정 {esc(a['계정'])} · 로그 검증 {esc(a['검증상태'])}"
+                + (" · 인적 사항 " + " ".join(f"{esc(k)}({esc(v)})" for k, v in src.items())
                    if (src := {k: v for k, v in (a.get("인적사항출처") or {}).items()
                                if k in pipeline.PERSON_FIELDS}) else "")
                 + "</div>", unsafe_allow_html=True)
@@ -363,7 +386,7 @@ def render_detail(analysis_id, key):
     # ---------------- 요약 ----------------
     with st.container(border=True):
         st.markdown("##### 한눈에 보기 &nbsp;&nbsp; :orange-badge[LLM 연동 전 예시]")
-        st.markdown(f"<div class='obi-lead'>{lead_text}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='obi-lead'>{esc(lead_text)}</div>", unsafe_allow_html=True)
         for p in points:
             st.markdown(f"- {p}")
 
@@ -731,10 +754,15 @@ with st.sidebar:
             st.session_state.pop("ollama_model", None)
         st.button("모델 목록 새로고침", key="ollama_refresh")
     else:
-        st.text_input("API 엔드포인트", key="openai_base_url",
-                      value=st.session_state.get("openai_base_url", conf["openai_base_url"]))
-        st.text_input("API 키", key="openai_api_key", type="password",
-                      placeholder="obi.ini 의 키 사용" if conf["openai_api_key"] else "")
+        st.session_state.setdefault("openai_base_url", conf["openai_base_url"])
+        st.session_state.setdefault("openai_api_key", (st.session_state.get(OPENAI_KEYS) or {}).get(
+            ai.endpoint_key(st.session_state["openai_base_url"]), ""))
+        st.text_input("API 엔드포인트", key="openai_base_url", on_change=_on_openai_url_change)
+        ini_url = ai.endpoint_key(st.session_state["openai_base_url"]) == ai.endpoint_key(conf["openai_base_url"])
+        st.text_input("API 키", key="openai_api_key", type="password", on_change=_on_openai_key_change,
+                      placeholder="obi.ini 의 키 사용" if conf["openai_api_key"] and ini_url else "")
+        st.caption("키는 입력한 엔드포인트에만 보냅니다. obi.ini 의 키는 obi.ini 의 주소일 때만 쓰고, "
+                   "주소를 바꾸면 그 주소의 키를 직접 입력해야 합니다.")
         st.text_input("모델명", key="openai_model",
                       value=st.session_state.get("openai_model", conf["openai_model"]))
     st.divider()

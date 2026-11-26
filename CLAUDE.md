@@ -38,7 +38,7 @@ Development rules:
 - Input is `tests/fixtures/sample_ddi.py` (synthetic, built at test time; `.xlsx` is never committed). New rule/edge case → add rows there + a line in `SCENARIO_NOTES`, then `update`.
 - Golden snapshots in `tests/golden/sample/`: `schema.json` (columns = **format**), `excel.json` (exported workbook), `app.json` (after DB round-trip, what the UI shows), `prompt.txt` (LLM prompt). A diff in `schema.json` means the format changed — call it out explicitly.
 - Never `update` golden to make a failing test pass without explaining the diff to the user.
-- `tests/test_scenarios.py` encodes each requirement's 완료 기준 from `OBI_requirements_2026-11-19.md` (one test group per REQ). New requirement → add its scenario there.
+- `tests/test_scenarios.py` encodes each requirement's 완료 기준 (one test group per REQ; the requirement docs themselves are no longer kept in the repo). New requirement → add its scenario there.
 - `tests/test_contracts.py` holds invariants that must survive the LLM swap (candidate columns, 판단 keys = `WEIGHTS`, score = `score_candidate(판단)`, every `확인 필요` event in exactly one candidate). LLM reports must pass `harness.check_report_format()` (= `obi_ai.check_report_format`, also run on every AI 의견 in the app).
 - Output must not depend on set/dict iteration order or wall-clock time (`test_deterministic_across_processes` runs with two `PYTHONHASHSEED`s).
 - `obi_pipeline.py` is the single headless path used by both `app.py` and the harness — put non-UI logic there, not in `app.py`.

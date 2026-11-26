@@ -85,3 +85,21 @@ def test_legacy_export_excludes_test(db, sample):
     pipeline.save(sample["result"])
     pipeline.save(sample["result"], test=True)
     assert len(store.to_legacy_frame(store.list_analyses())) == 1
+
+
+def test_db_path_tolerates_quotes_and_folder(monkeypatch, tmp_path):
+    """OBI_DB_PATH 에 따옴표를 붙이거나 폴더만 적어도 같은 DB 파일을 연다."""
+    monkeypatch.setattr(store, "DB_PATH", f'"{tmp_path}"')
+    store.init_db()
+    assert store.db_path() == str(tmp_path / "obi_history.db")
+    assert (tmp_path / "obi_history.db").exists()
+
+
+def test_init_db_unopenable_gives_clear_error(monkeypatch, tmp_path):
+    """DB 를 열 수 없으면 날 OperationalError 대신 경로·원인 후보를 담은 DBOpenError."""
+    blocker = tmp_path / "file"
+    blocker.write_text("x")                       # 파일 아래에 폴더를 만들 수 없다
+    monkeypatch.setattr(store, "DB_PATH", str(blocker / "sub" / "x.db"))
+    with pytest.raises(store.DBOpenError) as e:
+        store.init_db(wait=0)
+    assert str(blocker / "sub" / "x.db") in str(e.value)

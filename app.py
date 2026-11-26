@@ -21,7 +21,11 @@ import obi_store as store
 
 st.set_page_config(page_title="OBI · Offboarding Inspector", page_icon="🛡️", layout="wide",
                    initial_sidebar_state="expanded")
-store.init_db()
+try:
+    store.init_db()
+except store.DBOpenError as e:
+    st.error(str(e).replace("\n", "  \n"))
+    st.stop()
 
 NAVY, DEEP, BAR = "#1E2761", "#002060", "#1B3A5C"
 BAND_COLOR = {"Critical": ("#FBE9E7", "#A8322D"), "Medium": ("#FDF1DF", "#9A5B0C"), "Low": ("#E9EEF7", "#1E2761")}
@@ -670,7 +674,7 @@ def page_history():
         include_test = g3.toggle("Test 이력 포함", value=False)
     view = pipeline.board(df, q, comps, states, grades, d_from, d_to, include_test)
 
-    st.caption(f"{len(view)}건 · 최신순 · 행을 누르면 아래에 상세가 나옵니다 · 저장 위치 `{store.DB_PATH}`")
+    st.caption(f"{len(view)}건 · 최신순 · 행을 누르면 아래에 상세가 나옵니다 · 저장 위치 `{store.db_path()}`")
     event = st.dataframe(view, hide_index=True, width="stretch", on_select="rerun",
                          selection_mode="single-row", key="board_table")
     picked_ids = view["이력#"].tolist()
@@ -769,7 +773,7 @@ with st.sidebar:
     if st.button("잠금 (로그아웃)", key="logout"):
         st.session_state.pop("obi_authed", None)
         st.rerun()
-    st.caption(f"이력 저장 위치\n\n`{store.DB_PATH}`\n\n서약서 저장 위치\n\n`{store.files_dir()}`")
+    st.caption(f"이력 저장 위치\n\n`{store.db_path()}`\n\n서약서 저장 위치\n\n`{store.files_dir()}`")
 
 if menu == "새 분석":
     page_new()

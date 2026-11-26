@@ -10,6 +10,7 @@ OBI 이력 저장소 (SQLite)
 import json
 import os
 import sqlite3
+import time
 from contextlib import contextmanager
 from datetime import datetime
 
@@ -64,12 +65,48 @@ def _now():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+class DBOpenError(RuntimeError):
+    """이력 DB 를 열 수 없음. 메시지에 경로와 점검 결과(원인 후보)가 들어 있다."""
+
+
+def db_path():
+    """실제로 열 DB 파일 경로.
+    OBI_DB_PATH 를 배치 파일에서 `set OBI_DB_PATH="D:\\x\\a.db"` 처럼 따옴표째 넣거나, 폴더만 적거나,
+    상대 경로로 적어도 같은 파일을 가리키게 정리한다."""
+    p = str(DB_PATH).strip().strip('"').strip("'").strip()
+    p = os.path.abspath(os.path.expandvars(os.path.expanduser(p)))
+    if os.path.isdir(p):
+        p = os.path.join(p, "obi_history.db")
+    return p
+
+
+def _diagnose(path, err):
+    """'unable to open database file' 의 원인 후보를 사람이 읽을 수 있게 정리한다."""
+    d = os.path.dirname(path)
+    lines = [f"이력 DB 를 열 수 없습니다: {err}", f"- 경로: {path}"]
+    if not os.path.isdir(d):
+        lines.append(f"- 폴더가 없고 만들 수도 없습니다: {d}")
+    elif not os.access(d, os.W_OK):
+        lines.append(f"- 폴더에 쓰기 권한이 없습니다: {d} (DB 옆에 -wal/-shm 파일을 만들어야 합니다)")
+    if os.path.exists(path):
+        if not os.access(path, os.W_OK):
+            lines.append("- DB 파일이 읽기 전용입니다 (파일 속성의 '읽기 전용'을 해제하세요).")
+        for ext in ("-wal", "-shm"):
+            side = path + ext
+            if os.path.exists(side) and not os.access(side, os.W_OK):
+                lines.append(f"- {os.path.basename(side)} 파일이 읽기 전용이거나 다른 사용자 소유입니다.")
+    lines.append("- 다른 프로그램(DB Browser, 백신, 백업·동기화 프로그램 등)이 DB 파일을 잠그고 있으면 닫고 다시 실행하세요.")
+    lines.append("- OneDrive/SharePoint 동기화 폴더나 네트워크 드라이브에 두면 열리지 않을 수 있습니다 (OBI_DB_PATH 로 로컬 경로 지정).")
+    return "\n".join(lines)
+
+
 @contextmanager
 def _conn():
     """커밋(오류 시 롤백) 후 연결을 반드시 닫는다.
     sqlite3 연결의 기본 with 문은 커밋만 하고 닫지 않아 Windows 에서 DB 파일이 잠긴 채 남는다."""
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    con = sqlite3.connect(DB_PATH, timeout=15)   # 다른 사람이 저장 중이면 최대 15초 대기
+    path = db_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    con = sqlite3.connect(path, timeout=15)   # 다른 사람이 저장 중이면 최대 15초 대기
     con.row_factory = sqlite3.Row
     try:
         with con:
@@ -78,7 +115,24 @@ def _conn():
         con.close()
 
 
-def init_db():
+def init_db(retries=3, wait=1.0):
+    """테이블 생성·마이그레이션. 열지 못하면 잠깐 기다렸다 다시 시도하고(백신·백업의 일시 잠금 대비),
+    그래도 안 되면 원인 후보를 담은 DBOpenError 를 낸다."""
+    path = db_path()
+    for i in range(retries):
+        try:
+            return _init_db()
+        except sqlite3.OperationalError as e:
+            if "unable to open" not in str(e) and "readonly" not in str(e):
+                raise
+            if i == retries - 1:
+                raise DBOpenError(_diagnose(path, e)) from e
+            time.sleep(wait)
+        except OSError as e:          # 폴더를 만들 수 없음 (드라이브 없음, 권한 없음 등)
+            raise DBOpenError(_diagnose(path, e)) from e
+
+
+def _init_db():
     with _conn() as con:
         con.execute("PRAGMA journal_mode=WAL")    # 읽는 동안에도 저장 가능 (DB 파일 옆에 -wal, -shm 생성)
         con.execute("""
